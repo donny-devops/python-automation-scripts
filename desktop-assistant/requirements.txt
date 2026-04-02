@@ -1,0 +1,11 @@
+anthropic==0.40.*
+pyttsx3==2.90
+SpeechRecognition==3.10.*
+plyer==2.1.*
+schedule==1.2.*
+requests==2.31.*
+python-dotenv==1.*
+pyaudio==0.2.14       # microphone input — install via pip after portaudio
+pillow==10.*          # screenshot/image support
+psutil==5.*           # system stats
+pyperclip==1.8.*      # clipboard access

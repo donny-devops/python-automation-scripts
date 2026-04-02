@@ -1,0 +1,3 @@
+rich==13.*
+python-dotenv==1.*
+anthropic==0.40.*    # optional: AI sensei hints
