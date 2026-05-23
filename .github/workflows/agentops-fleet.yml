@@ -1,0 +1,22 @@
+name: AgentOps Fleet Gate
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: '33 8 * * 1'
+
+permissions:
+  contents: read
+  actions: read
+  security-events: write
+  pull-requests: read
+
+jobs:
+  agentops:
+    uses: donny-devops/github-actions-templates/.github/workflows/reusable-agentops.yml@main
+    with:
+      python-version: '3.12'
+      node-version: '22'
+      run-security-audit: true
