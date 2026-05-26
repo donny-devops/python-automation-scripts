@@ -7,7 +7,7 @@ Features:
   • Text-to-speech responses via pyttsx3
   • Desktop notifications via plyer
   • Scheduled automated notifications (reminders, weather, daily briefing)
-  • System stats monitoring (CPU, memory, disk)
+  • System _stats monitoring (CPU, memory, disk)
   • Clipboard reading / summarisation
   • Screenshot description (AI vision)
 
@@ -42,12 +42,12 @@ WAKE_WORD = os.getenv("WAKE_WORD", "aria").lower()
 MODEL = "claude-sonnet-4-6"
 
 SYSTEM_PROMPT = f"""You are {ASSISTANT_NAME}, a helpful, concise desktop assistant.
-You have access to the user's system stats and clipboard when they share them.
+You have access to the user's system _stats and clipboard when they share them.
 Keep responses short and actionable — this is a desktop assistant, not a chatbot.
 When the user asks you to set a reminder, extract the time and message and reply with:
 REMINDER|<ISO datetime>|<message>
 When the user asks to read their clipboard, they will provide the content — summarise it.
-When the user asks for a system report, they will provide stats — give a concise health summary."""
+When the user asks for a system report, they will provide _stats — give a concise health summary."""
 
 # ── TTS Engine ────────────────────────────────────────────────────────────────
 
@@ -176,7 +176,7 @@ def daily_briefing(client: anthropic.Anthropic, engine):
     prompt = (
         f"{greeting}! Please give me a very short daily briefing (3 bullets max). "
         f"Today is {datetime.now().strftime('%A, %B %d')}. "
-        f"Current system: {stats}"
+        f"Current system: {_stats}"
     )
     response = client.messages.create(
         model=MODEL,
@@ -243,7 +243,7 @@ class Assistant:
             kw in user_input.lower()
             for kw in ("system", "cpu", "memory", "ram", "disk", "health")
         ):
-            user_input += f"\n\n[System stats: {get_system_stats()}]"
+            user_input += f"\n\n[System _stats: {get_system_stats()}]"
 
         if "clipboard" in user_input.lower():
             try:
@@ -308,7 +308,7 @@ class Assistant:
                     self.history = []
                     print("[History cleared]")
                     continue
-                if user_input.lower() == "stats":
+                if user_input.lower() == "_stats":
                     print(get_system_stats())
                     continue
 
