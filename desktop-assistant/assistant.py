@@ -176,7 +176,7 @@ def daily_briefing(client: anthropic.Anthropic, engine):
     prompt = (
         f"{greeting}! Please give me a very short daily briefing (3 bullets max). "
         f"Today is {datetime.now().strftime('%A, %B %d')}. "
-        f"Current system: {_stats}"
+        "Current system: N/A"
     )
     response = client.messages.create(
         model=MODEL,
