@@ -164,7 +164,7 @@ def schedule_reminder(dt: datetime, message: str, engine):
 
 
 def daily_briefing(client: anthropic.Anthropic, engine):
-    stats = get_system_stats()
+    _stats = get_system_stats()
     hour = datetime.now().hour
     greeting = (
         "Good morning"
@@ -191,7 +191,7 @@ def daily_briefing(client: anthropic.Anthropic, engine):
 
 
 def system_health_check(engine):
-    stats = get_system_stats()
+    _stats = get_system_stats()
     cpu = psutil.cpu_percent()
     mem = psutil.virtual_memory().percent
     issues = []
