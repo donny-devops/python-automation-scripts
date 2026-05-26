@@ -26,18 +26,15 @@ Usage:
 
 import os
 import json
-import math
 import random
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from dataclasses import dataclass, field, asdict
-from typing import Optional
 
 from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
-from rich.text import Text
-from rich.prompt import Prompt, Confirm
+from rich.prompt import Prompt
 from rich import box
 from dotenv import load_dotenv
 
@@ -49,34 +46,74 @@ DATA_FILE = Path("dojo_data.json")
 # ── Ranks ─────────────────────────────────────────────────────────────────────
 
 RANKS = [
-    ("White Belt",  "⬜",    0),
-    ("Yellow Belt", "🟨",  100),
-    ("Orange Belt", "🟧",  250),
-    ("Green Belt",  "🟩",  500),
-    ("Blue Belt",   "🟦",  900),
+    ("White Belt", "⬜", 0),
+    ("Yellow Belt", "🟨", 100),
+    ("Orange Belt", "🟧", 250),
+    ("Green Belt", "🟩", 500),
+    ("Blue Belt", "🟦", 900),
     ("Purple Belt", "🟪", 1400),
-    ("Brown Belt",  "🟫", 2100),
-    ("Red Belt",    "🟥", 3000),
-    ("Black Belt",  "⬛", 4200),
-    ("Grand Master","🏆", 6000),
+    ("Brown Belt", "🟫", 2100),
+    ("Red Belt", "🟥", 3000),
+    ("Black Belt", "⬛", 4200),
+    ("Grand Master", "🏆", 6000),
 ]
 
 PRIORITY_CONFIG = {
-    "critical": {"dp": 40, "label": "CRITICAL", "color": "bold red",    "symbol": "🔴"},
-    "high":     {"dp": 20, "label": "HIGH",     "color": "bold yellow", "symbol": "🟡"},
-    "normal":   {"dp": 10, "label": "NORMAL",   "color": "bold green",  "symbol": "🟢"},
-    "low":      {"dp":  5, "label": "LOW",      "color": "bold blue",   "symbol": "🔵"},
+    "critical": {"dp": 40, "label": "CRITICAL", "color": "bold red", "symbol": "🔴"},
+    "high": {"dp": 20, "label": "HIGH", "color": "bold yellow", "symbol": "🟡"},
+    "normal": {"dp": 10, "label": "NORMAL", "color": "bold green", "symbol": "🟢"},
+    "low": {"dp": 5, "label": "LOW", "color": "bold blue", "symbol": "🔵"},
 }
 
 ACHIEVEMENTS = {
-    "first_blood":  {"name": "First Blood",    "icon": "🩸", "desc": "Complete your first task",           "condition": lambda s: s["total_completed"] >= 1},
-    "on_fire":      {"name": "On Fire",         "icon": "🔥", "desc": "Complete 5 tasks in one session",   "condition": lambda s: s["session_completed"] >= 5},
-    "iron_will":    {"name": "Iron Will",       "icon": "⚙️", "desc": "Maintain a 7-day streak",           "condition": lambda s: s["streak"] >= 7},
-    "dragon":       {"name": "Dragon",          "icon": "🐉", "desc": "Reach Black Belt",                  "condition": lambda s: s["total_dp"] >= 4200},
-    "centurion":    {"name": "Centurion",       "icon": "💯", "desc": "Complete 100 tasks",                "condition": lambda s: s["total_completed"] >= 100},
-    "perfectionist":{"name": "Perfectionist",  "icon": "✨", "desc": "Complete 10 critical tasks",        "condition": lambda s: s["critical_completed"] >= 10},
-    "no_days_off":  {"name": "No Days Off",    "icon": "📅", "desc": "Maintain a 30-day streak",          "condition": lambda s: s["streak"] >= 30},
-    "sensei":       {"name": "Sensei",          "icon": "🎓", "desc": "Reach Grand Master rank",           "condition": lambda s: s["total_dp"] >= 6000},
+    "first_blood": {
+        "name": "First Blood",
+        "icon": "🩸",
+        "desc": "Complete your first task",
+        "condition": lambda s: s["total_completed"] >= 1,
+    },
+    "on_fire": {
+        "name": "On Fire",
+        "icon": "🔥",
+        "desc": "Complete 5 tasks in one session",
+        "condition": lambda s: s["session_completed"] >= 5,
+    },
+    "iron_will": {
+        "name": "Iron Will",
+        "icon": "⚙️",
+        "desc": "Maintain a 7-day streak",
+        "condition": lambda s: s["streak"] >= 7,
+    },
+    "dragon": {
+        "name": "Dragon",
+        "icon": "🐉",
+        "desc": "Reach Black Belt",
+        "condition": lambda s: s["total_dp"] >= 4200,
+    },
+    "centurion": {
+        "name": "Centurion",
+        "icon": "💯",
+        "desc": "Complete 100 tasks",
+        "condition": lambda s: s["total_completed"] >= 100,
+    },
+    "perfectionist": {
+        "name": "Perfectionist",
+        "icon": "✨",
+        "desc": "Complete 10 critical tasks",
+        "condition": lambda s: s["critical_completed"] >= 10,
+    },
+    "no_days_off": {
+        "name": "No Days Off",
+        "icon": "📅",
+        "desc": "Maintain a 30-day streak",
+        "condition": lambda s: s["streak"] >= 30,
+    },
+    "sensei": {
+        "name": "Sensei",
+        "icon": "🎓",
+        "desc": "Reach Grand Master rank",
+        "condition": lambda s: s["total_dp"] >= 6000,
+    },
 }
 
 KI_PHRASES = [
@@ -95,34 +132,36 @@ KI_PHRASES = [
 
 # ── Data Model ────────────────────────────────────────────────────────────────
 
+
 @dataclass
 class Task:
-    id:          int
-    title:       str
-    priority:    str         = "normal"
-    due_date:    str | None  = None
-    created_at:  str         = field(default_factory=lambda: datetime.now().isoformat())
-    completed_at:str | None  = None
-    dp_earned:   int         = 0
-    notes:       str         = ""
-    tags:        list[str]   = field(default_factory=list)
+    id: int
+    title: str
+    priority: str = "normal"
+    due_date: str | None = None
+    created_at: str = field(default_factory=lambda: datetime.now().isoformat())
+    completed_at: str | None = None
+    dp_earned: int = 0
+    notes: str = ""
+    tags: list[str] = field(default_factory=list)
 
 
 @dataclass
 class DojoState:
-    tasks:               list[dict]      = field(default_factory=list)
-    total_dp:            int             = 0
-    total_completed:     int             = 0
-    critical_completed:  int             = 0
-    streak:              int             = 0
-    last_active_date:    str | None      = None
-    achievements:        list[str]       = field(default_factory=list)
-    history:             list[dict]      = field(default_factory=list)
-    session_completed:   int             = 0
-    next_id:             int             = 1
+    tasks: list[dict] = field(default_factory=list)
+    total_dp: int = 0
+    total_completed: int = 0
+    critical_completed: int = 0
+    streak: int = 0
+    last_active_date: str | None = None
+    achievements: list[str] = field(default_factory=list)
+    history: list[dict] = field(default_factory=list)
+    session_completed: int = 0
+    next_id: int = 1
 
 
 # ── Persistence ───────────────────────────────────────────────────────────────
+
 
 def load_state() -> DojoState:
     if DATA_FILE.exists():
@@ -136,6 +175,7 @@ def save_state(state: DojoState):
 
 
 # ── Rank Helpers ──────────────────────────────────────────────────────────────
+
 
 def get_rank(dp: int) -> tuple[str, str, int]:
     current = RANKS[0]
@@ -154,18 +194,19 @@ def get_next_rank(dp: int) -> tuple[str, str, int] | None:
 
 def rank_progress_bar(dp: int) -> str:
     current = get_rank(dp)
-    nxt     = get_next_rank(dp)
+    nxt = get_next_rank(dp)
     if not nxt:
         return "[bold gold1]GRAND MASTER — MAX RANK[/]"
-    earned  = dp - current[2]
-    needed  = nxt[2] - current[2]
-    pct     = min(earned / needed, 1.0)
-    filled  = int(pct * 20)
-    bar     = "█" * filled + "░" * (20 - filled)
-    return f"[cyan]{bar}[/] {int(pct*100)}%  ({dp}/{nxt[2]} DP → {nxt[1]} {nxt[0]})"
+    earned = dp - current[2]
+    needed = nxt[2] - current[2]
+    pct = min(earned / needed, 1.0)
+    filled = int(pct * 20)
+    bar = "█" * filled + "░" * (20 - filled)
+    return f"[cyan]{bar}[/] {int(pct * 100)}%  ({dp}/{nxt[2]} DP → {nxt[1]} {nxt[0]})"
 
 
 # ── Streak ────────────────────────────────────────────────────────────────────
+
 
 def update_streak(state: DojoState) -> int:
     today = str(date.today())
@@ -181,23 +222,28 @@ def update_streak(state: DojoState) -> int:
 
 
 def streak_multiplier(streak: int) -> float:
-    if streak >= 30: return 3.0
-    if streak >= 14: return 2.0
-    if streak >=  7: return 1.5
-    if streak >=  3: return 1.25
+    if streak >= 30:
+        return 3.0
+    if streak >= 14:
+        return 2.0
+    if streak >= 7:
+        return 1.5
+    if streak >= 3:
+        return 1.25
     return 1.0
 
 
 # ── Achievements ──────────────────────────────────────────────────────────────
 
+
 def check_achievements(state: DojoState) -> list[str]:
     new_badges = []
     stats = {
-        "total_completed":    state.total_completed,
+        "total_completed": state.total_completed,
         "critical_completed": state.critical_completed,
-        "streak":             state.streak,
-        "total_dp":           state.total_dp,
-        "session_completed":  state.session_completed,
+        "streak": state.streak,
+        "total_dp": state.total_dp,
+        "session_completed": state.session_completed,
     }
     for key, ach in ACHIEVEMENTS.items():
         if key not in state.achievements and ach["condition"](stats):
@@ -208,24 +254,28 @@ def check_achievements(state: DojoState) -> list[str]:
 
 # ── AI Sensei ─────────────────────────────────────────────────────────────────
 
+
 def sensei_hint(task_title: str) -> str:
     api_key = os.getenv("ANTHROPIC_API_KEY", "")
     if not api_key:
         return random.choice(KI_PHRASES)
     try:
         import anthropic
+
         client = anthropic.Anthropic(api_key=api_key)
         response = client.messages.create(
             model="claude-sonnet-4-6",
             max_tokens=80,
-            messages=[{
-                "role": "user",
-                "content": (
-                    f"You are a wise kung-fu sensei. Give one short motivational line "
-                    f"(max 20 words) to a student who just completed this task: '{task_title}'. "
-                    f"Use a martial arts metaphor."
-                ),
-            }],
+            messages=[
+                {
+                    "role": "user",
+                    "content": (
+                        f"You are a wise kung-fu sensei. Give one short motivational line "
+                        f"(max 20 words) to a student who just completed this task: '{task_title}'. "
+                        f"Use a martial arts metaphor."
+                    ),
+                }
+            ],
         )
         return response.content[0].text.strip()
     except Exception:
@@ -234,20 +284,23 @@ def sensei_hint(task_title: str) -> str:
 
 # ── Display ───────────────────────────────────────────────────────────────────
 
+
 def print_header(state: DojoState):
     rank = get_rank(state.total_dp)
     streak_mult = streak_multiplier(state.streak)
     console.print()
-    console.print(Panel(
-        f"[bold white]{rank[1]}  {rank[0].upper()}[/]  ·  "
-        f"[bold gold1]{state.total_dp} DP[/]  ·  "
-        f"[bold cyan]🔥 {state.streak}-day streak[/]  ·  "
-        f"[bold magenta]×{streak_mult:.2f} multiplier[/]\n"
-        f"{rank_progress_bar(state.total_dp)}",
-        title="[bold red]⛩  TO-DOJO  ⛩[/]",
-        border_style="red",
-        expand=False,
-    ))
+    console.print(
+        Panel(
+            f"[bold white]{rank[1]}  {rank[0].upper()}[/]  ·  "
+            f"[bold gold1]{state.total_dp} DP[/]  ·  "
+            f"[bold cyan]🔥 {state.streak}-day streak[/]  ·  "
+            f"[bold magenta]×{streak_mult:.2f} multiplier[/]\n"
+            f"{rank_progress_bar(state.total_dp)}",
+            title="[bold red]⛩  TO-DOJO  ⛩[/]",
+            border_style="red",
+            expand=False,
+        )
+    )
 
 
 def print_tasks(state: DojoState):
@@ -256,22 +309,26 @@ def print_tasks(state: DojoState):
         console.print("[dim]  No pending tasks — the dojo awaits your first scroll.[/]")
         return
 
-    table = Table(title="📜 Pending Tasks", box=box.ROUNDED, show_lines=True, border_style="red")
-    table.add_column("#",        style="dim", width=4)
-    table.add_column("Task",     style="bold white", min_width=28)
+    table = Table(
+        title="📜 Pending Tasks", box=box.ROUNDED, show_lines=True, border_style="red"
+    )
+    table.add_column("#", style="dim", width=4)
+    table.add_column("Task", style="bold white", min_width=28)
     table.add_column("Priority", justify="center", width=12)
-    table.add_column("DP",       justify="center", width=6)
-    table.add_column("Due",      justify="center", width=12)
-    table.add_column("Tags",     width=18)
+    table.add_column("DP", justify="center", width=6)
+    table.add_column("Due", justify="center", width=12)
+    table.add_column("Tags", width=18)
 
-    for t in sorted(pending, key=lambda x: ["critical","high","normal","low"].index(x.priority)):
-        cfg     = PRIORITY_CONFIG[t.priority]
+    for t in sorted(
+        pending, key=lambda x: ["critical", "high", "normal", "low"].index(x.priority)
+    ):
+        cfg = PRIORITY_CONFIG[t.priority]
         due_str = t.due_date or "—"
         due_col = "red" if (t.due_date and t.due_date < str(date.today())) else "white"
         base_dp = cfg["dp"]
-        mult    = streak_multiplier(state.streak)
-        est_dp  = int(base_dp * mult)
-        tags    = ", ".join(t.tags) if t.tags else "—"
+        mult = streak_multiplier(state.streak)
+        est_dp = int(base_dp * mult)
+        tags = ", ".join(t.tags) if t.tags else "—"
         table.add_row(
             str(t.id),
             t.title,
@@ -289,20 +346,23 @@ def print_stats(state: DojoState):
     table.add_column("Value", style="white")
 
     rank = get_rank(state.total_dp)
-    table.add_row("Rank",             f"{rank[1]} {rank[0]}")
-    table.add_row("Total DP",         str(state.total_dp))
-    table.add_row("Tasks Completed",  str(state.total_completed))
-    table.add_row("Critical Done",    str(state.critical_completed))
-    table.add_row("Current Streak",   f"🔥 {state.streak} days")
-    table.add_row("Multiplier",       f"×{streak_multiplier(state.streak):.2f}")
-    table.add_row("Pending Tasks",    str(sum(1 for t in state.tasks if not t.get("completed_at"))))
-    table.add_row("Achievements",     str(len(state.achievements)))
+    table.add_row("Rank", f"{rank[1]} {rank[0]}")
+    table.add_row("Total DP", str(state.total_dp))
+    table.add_row("Tasks Completed", str(state.total_completed))
+    table.add_row("Critical Done", str(state.critical_completed))
+    table.add_row("Current Streak", f"🔥 {state.streak} days")
+    table.add_row("Multiplier", f"×{streak_multiplier(state.streak):.2f}")
+    table.add_row(
+        "Pending Tasks", str(sum(1 for t in state.tasks if not t.get("completed_at")))
+    )
+    table.add_row("Achievements", str(len(state.achievements)))
     console.print(table)
 
     if state.achievements:
         badges = "  ".join(
             f"{ACHIEVEMENTS[k]['icon']} {ACHIEVEMENTS[k]['name']}"
-            for k in state.achievements if k in ACHIEVEMENTS
+            for k in state.achievements
+            if k in ACHIEVEMENTS
         )
         console.print(Panel(badges, title="🏅 Achievements", border_style="gold1"))
 
@@ -325,6 +385,7 @@ def print_menu():
 
 # ── Actions ───────────────────────────────────────────────────────────────────
 
+
 def add_task(state: DojoState):
     console.print("\n[bold red]— New Scroll —[/]")
     title = Prompt.ask("[bold white]Task title")
@@ -338,9 +399,9 @@ def add_task(state: DojoState):
         default="normal",
     )
     due_raw = Prompt.ask("Due date [dim](YYYY-MM-DD or blank)[/]", default="")
-    notes   = Prompt.ask("Notes [dim](optional)[/]", default="")
-    tags_raw= Prompt.ask("Tags [dim](comma-separated, optional)[/]", default="")
-    tags    = [t.strip() for t in tags_raw.split(",") if t.strip()]
+    notes = Prompt.ask("Notes [dim](optional)[/]", default="")
+    tags_raw = Prompt.ask("Tags [dim](comma-separated, optional)[/]", default="")
+    tags = [t.strip() for t in tags_raw.split(",") if t.strip()]
 
     task = Task(
         id=state.next_id,
@@ -354,8 +415,10 @@ def add_task(state: DojoState):
     state.next_id += 1
 
     cfg = PRIORITY_CONFIG[priority]
-    console.print(f"\n[bold green]✓ Scroll added:[/] {cfg['symbol']} [bold]{task.title}[/]  "
-                  f"[{cfg['color']}]({cfg['label']})[/]  ID #{task.id}")
+    console.print(
+        f"\n[bold green]✓ Scroll added:[/] {cfg['symbol']} [bold]{task.title}[/]  "
+        f"[{cfg['color']}]({cfg['label']})[/]  ID #{task.id}"
+    )
     save_state(state)
 
 
@@ -378,27 +441,29 @@ def complete_task(state: DojoState):
             task = Task(**t)
 
             # Calculate DP
-            streak  = update_streak(state)
-            mult    = streak_multiplier(streak)
+            streak = update_streak(state)
+            mult = streak_multiplier(streak)
             base_dp = PRIORITY_CONFIG[task.priority]["dp"]
-            earned  = int(base_dp * mult)
+            earned = int(base_dp * mult)
 
             t["completed_at"] = datetime.now().isoformat()
-            t["dp_earned"]    = earned
+            t["dp_earned"] = earned
 
-            state.total_dp          += earned
-            state.total_completed   += 1
+            state.total_dp += earned
+            state.total_completed += 1
             state.session_completed += 1
             if task.priority == "critical":
                 state.critical_completed += 1
 
-            state.history.append({
-                "task_id":     task.id,
-                "title":       task.title,
-                "priority":    task.priority,
-                "dp_earned":   earned,
-                "completed_at":t["completed_at"],
-            })
+            state.history.append(
+                {
+                    "task_id": task.id,
+                    "title": task.title,
+                    "priority": task.priority,
+                    "dp_earned": earned,
+                    "completed_at": t["completed_at"],
+                }
+            )
 
             # Rank-up check
             old_rank = get_rank(state.total_dp - earned)
@@ -407,37 +472,43 @@ def complete_task(state: DojoState):
 
             # Print completion
             console.print()
-            console.print(Panel(
-                f"[bold green]TASK COMPLETE[/]  {PRIORITY_CONFIG[task.priority]['symbol']}\n\n"
-                f"[bold white]{task.title}[/]\n\n"
-                f"[bold gold1]+{earned} DP[/]  [dim](×{mult:.2f} streak bonus)[/]  →  "
-                f"[bold cyan]{state.total_dp} DP total[/]",
-                border_style="green",
-                expand=False,
-            ))
+            console.print(
+                Panel(
+                    f"[bold green]TASK COMPLETE[/]  {PRIORITY_CONFIG[task.priority]['symbol']}\n\n"
+                    f"[bold white]{task.title}[/]\n\n"
+                    f"[bold gold1]+{earned} DP[/]  [dim](×{mult:.2f} streak bonus)[/]  →  "
+                    f"[bold cyan]{state.total_dp} DP total[/]",
+                    border_style="green",
+                    expand=False,
+                )
+            )
 
             if promoted:
-                console.print(Panel(
-                    f"[bold yellow]RANK UP!  {new_rank[1]}  {new_rank[0].upper()}[/]\n"
-                    f"[dim]You have proven your worth, warrior.[/]",
-                    border_style="yellow",
-                    expand=False,
-                ))
+                console.print(
+                    Panel(
+                        f"[bold yellow]RANK UP!  {new_rank[1]}  {new_rank[0].upper()}[/]\n"
+                        f"[dim]You have proven your worth, warrior.[/]",
+                        border_style="yellow",
+                        expand=False,
+                    )
+                )
 
             # Check achievements
             new_badges = check_achievements(state)
             for key in new_badges:
                 ach = ACHIEVEMENTS[key]
-                console.print(Panel(
-                    f"[bold magenta]ACHIEVEMENT UNLOCKED[/]  {ach['icon']}  [bold]{ach['name']}[/]\n"
-                    f"[dim]{ach['desc']}[/]",
-                    border_style="magenta",
-                    expand=False,
-                ))
+                console.print(
+                    Panel(
+                        f"[bold magenta]ACHIEVEMENT UNLOCKED[/]  {ach['icon']}  [bold]{ach['name']}[/]\n"
+                        f"[dim]{ach['desc']}[/]",
+                        border_style="magenta",
+                        expand=False,
+                    )
+                )
 
             # Sensei wisdom
             hint = sensei_hint(task.title)
-            console.print(f"\n[italic dim cyan]🧘 Sensei says: \"{hint}\"[/]\n")
+            console.print(f'\n[italic dim cyan]🧘 Sensei says: "{hint}"[/]\n')
 
             save_state(state)
             return
@@ -454,7 +525,9 @@ def delete_task(state: DojoState):
         console.print("[red]Invalid ID.[/]")
         return
     before = len(state.tasks)
-    state.tasks = [t for t in state.tasks if not (t["id"] == tid and not t.get("completed_at"))]
+    state.tasks = [
+        t for t in state.tasks if not (t["id"] == tid and not t.get("completed_at"))
+    ]
     if len(state.tasks) < before:
         console.print(f"[dim]Task #{tid} removed.[/]")
         save_state(state)
@@ -515,17 +588,20 @@ def show_history(state: DojoState):
 
 # ── Main Loop ─────────────────────────────────────────────────────────────────
 
+
 def main():
     state = load_state()
     update_streak(state)
 
     console.clear()
-    console.print(Panel(
-        "[bold red]⛩  WELCOME TO THE TO-DOJO  ⛩[/]\n"
-        "[dim]Where productivity meets the way of the warrior.[/]",
-        border_style="red",
-        expand=False,
-    ))
+    console.print(
+        Panel(
+            "[bold red]⛩  WELCOME TO THE TO-DOJO  ⛩[/]\n"
+            "[dim]Where productivity meets the way of the warrior.[/]",
+            border_style="red",
+            expand=False,
+        )
+    )
 
     while True:
         print_header(state)
@@ -549,7 +625,9 @@ def main():
             edit_task(state)
         elif choice in ("q", "quit", "exit"):
             save_state(state)
-            console.print("\n[bold red]⛩  The dojo awaits your return, warrior.  ⛩[/]\n")
+            console.print(
+                "\n[bold red]⛩  The dojo awaits your return, warrior.  ⛩[/]\n"
+            )
             break
         else:
             console.print("[dim]Unknown command.[/]")

@@ -18,12 +18,10 @@ Usage:
 """
 
 import os
-import sys
 import time
 import threading
 import argparse
-import textwrap
-from datetime import datetime, timedelta
+from datetime import datetime
 
 import anthropic
 import psutil
@@ -38,10 +36,10 @@ load_dotenv()
 # ── Config ───────────────────────────────────────────────────────────────────
 
 ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
-ASSISTANT_NAME    = os.getenv("ASSISTANT_NAME", "Aria")
-VOICE_ENABLED     = os.getenv("VOICE_ENABLED", "true").lower() == "true"
-WAKE_WORD         = os.getenv("WAKE_WORD", "aria").lower()
-MODEL             = "claude-sonnet-4-6"
+ASSISTANT_NAME = os.getenv("ASSISTANT_NAME", "Aria")
+VOICE_ENABLED = os.getenv("VOICE_ENABLED", "true").lower() == "true"
+WAKE_WORD = os.getenv("WAKE_WORD", "aria").lower()
+MODEL = "claude-sonnet-4-6"
 
 SYSTEM_PROMPT = f"""You are {ASSISTANT_NAME}, a helpful, concise desktop assistant.
 You have access to the user's system stats and clipboard when they share them.
@@ -53,12 +51,17 @@ When the user asks for a system report, they will provide stats — give a conci
 
 # ── TTS Engine ────────────────────────────────────────────────────────────────
 
+
 def build_tts():
     engine = pyttsx3.init()
     voices = engine.getProperty("voices")
     # prefer a female voice if available
     for v in voices:
-        if "female" in v.name.lower() or "zira" in v.name.lower() or "hazel" in v.name.lower():
+        if (
+            "female" in v.name.lower()
+            or "zira" in v.name.lower()
+            or "hazel" in v.name.lower()
+        ):
             engine.setProperty("voice", v.id)
             break
     engine.setProperty("rate", 175)
@@ -77,9 +80,11 @@ def speak(engine, text: str):
 
 # ── Voice Input ───────────────────────────────────────────────────────────────
 
+
 def listen_for_voice(timeout: int = 5) -> str | None:
     try:
         import speech_recognition as sr
+
         r = sr.Recognizer()
         with sr.Microphone() as source:
             print(f"[{ASSISTANT_NAME}] Listening…", end=" ", flush=True)
@@ -95,11 +100,12 @@ def listen_for_voice(timeout: int = 5) -> str | None:
 
 # ── System Info ───────────────────────────────────────────────────────────────
 
+
 def get_system_stats() -> str:
-    cpu    = psutil.cpu_percent(interval=1)
-    mem    = psutil.virtual_memory()
-    disk   = psutil.disk_usage("/")
-    boot   = datetime.fromtimestamp(psutil.boot_time())
+    cpu = psutil.cpu_percent(interval=1)
+    mem = psutil.virtual_memory()
+    disk = psutil.disk_usage("/")
+    boot = datetime.fromtimestamp(psutil.boot_time())
     uptime = datetime.now() - boot
     return (
         f"CPU: {cpu}% | "
@@ -110,6 +116,7 @@ def get_system_stats() -> str:
 
 
 # ── Desktop Notifications ─────────────────────────────────────────────────────
+
 
 def send_notification(title: str, message: str, timeout: int = 8):
     try:
@@ -142,21 +149,30 @@ def schedule_reminder(dt: datetime, message: str, engine):
     if delay <= 0:
         send_notification(f"{ASSISTANT_NAME} Reminder", message)
         return
+
     def fire():
         time.sleep(delay)
         send_notification(f"{ASSISTANT_NAME} Reminder", message)
         print(f"\n[Reminder] {message}")
         speak(engine, f"Reminder: {message}")
+
     threading.Thread(target=fire, daemon=True).start()
     print(f"[Reminder set for {dt.strftime('%H:%M')}] {message}")
 
 
 # ── Scheduled Notifications ───────────────────────────────────────────────────
 
+
 def daily_briefing(client: anthropic.Anthropic, engine):
     stats = get_system_stats()
-    hour  = datetime.now().hour
-    greeting = "Good morning" if hour < 12 else "Good afternoon" if hour < 17 else "Good evening"
+    hour = datetime.now().hour
+    greeting = (
+        "Good morning"
+        if hour < 12
+        else "Good afternoon"
+        if hour < 17
+        else "Good evening"
+    )
     prompt = (
         f"{greeting}! Please give me a very short daily briefing (3 bullets max). "
         f"Today is {datetime.now().strftime('%A, %B %d')}. "
@@ -175,12 +191,14 @@ def daily_briefing(client: anthropic.Anthropic, engine):
 
 
 def system_health_check(engine):
-    stats  = get_system_stats()
-    cpu    = psutil.cpu_percent()
-    mem    = psutil.virtual_memory().percent
+    stats = get_system_stats()
+    cpu = psutil.cpu_percent()
+    mem = psutil.virtual_memory().percent
     issues = []
-    if cpu > 85:   issues.append(f"CPU at {cpu}%")
-    if mem > 85:   issues.append(f"RAM at {mem}%")
+    if cpu > 85:
+        issues.append(f"CPU at {cpu}%")
+    if mem > 85:
+        issues.append(f"RAM at {mem}%")
     if issues:
         msg = "High resource usage: " + ", ".join(issues)
         send_notification(f"{ASSISTANT_NAME} Alert", msg)
@@ -202,22 +220,29 @@ def setup_scheduler(client: anthropic.Anthropic, engine):
         while True:
             schedule.run_pending()
             time.sleep(30)
+
     threading.Thread(target=run, daemon=True).start()
-    print("[Scheduler] Daily briefing @08:00 | Health check every 30m | Hourly pings active")
+    print(
+        "[Scheduler] Daily briefing @08:00 | Health check every 30m | Hourly pings active"
+    )
 
 
 # ── Conversation ──────────────────────────────────────────────────────────────
 
+
 class Assistant:
     def __init__(self, text_only: bool = False):
-        self.client   = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-        self.engine   = build_tts()
-        self.history  = []
+        self.client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+        self.engine = build_tts()
+        self.history = []
         self.text_only = text_only
 
     def chat(self, user_input: str) -> str:
         # Inject live context for special commands
-        if any(kw in user_input.lower() for kw in ("system", "cpu", "memory", "ram", "disk", "health")):
+        if any(
+            kw in user_input.lower()
+            for kw in ("system", "cpu", "memory", "ram", "disk", "health")
+        ):
             user_input += f"\n\n[System stats: {get_system_stats()}]"
 
         if "clipboard" in user_input.lower():
@@ -259,14 +284,17 @@ class Assistant:
 
     def run(self):
         setup_scheduler(self.client, self.engine)
-        print(f"\n{'─'*50}")
+        print(f"\n{'─' * 50}")
         print(f"  {ASSISTANT_NAME} — AI Desktop Assistant")
         print(f"  Model: {MODEL}")
         print(f"  Voice: {'on' if VOICE_ENABLED else 'off'}")
-        print(f"  Type 'quit' to exit | 'clear' to reset history")
-        print(f"{'─'*50}\n")
+        print("  Type 'quit' to exit | 'clear' to reset history")
+        print(f"{'─' * 50}\n")
 
-        speak(self.engine, f"Hello! I'm {ASSISTANT_NAME}, your desktop assistant. How can I help you today?")
+        speak(
+            self.engine,
+            f"Hello! I'm {ASSISTANT_NAME}, your desktop assistant. How can I help you today?",
+        )
 
         while True:
             try:
@@ -299,15 +327,21 @@ class Assistant:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=f"{ASSISTANT_NAME} Desktop Assistant")
-    parser.add_argument("--text",   action="store_true", help="Text-only mode (no microphone)")
-    parser.add_argument("--notify", action="store_true", help="Run notification scheduler only")
+    parser.add_argument(
+        "--text", action="store_true", help="Text-only mode (no microphone)"
+    )
+    parser.add_argument(
+        "--notify", action="store_true", help="Run notification scheduler only"
+    )
     args = parser.parse_args()
 
     if args.notify:
         client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
         engine = build_tts()
         setup_scheduler(client, engine)
-        print(f"[{ASSISTANT_NAME}] Notification scheduler running. Press Ctrl+C to stop.")
+        print(
+            f"[{ASSISTANT_NAME}] Notification scheduler running. Press Ctrl+C to stop."
+        )
         try:
             while True:
                 time.sleep(1)
