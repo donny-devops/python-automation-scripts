@@ -88,7 +88,7 @@ class ScrapedItem:
     error: str | None = None
 
     def id(self) -> str:
-        return hashlib.md5(f"{self.url}{self.scraped_at}".encode()).hexdigest()[:12]
+        return hashlib.md5(f"{self.url}{self.scraped_at}".encode(), usedforsecurity=False).hexdigest()[:12]
 
 
 # ── HTTP Helpers ──────────────────────────────────────────────────────────────
