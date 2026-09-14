@@ -39,3 +39,7 @@ def to_dojo() -> None:
 
 def desktop_assistant() -> None:
     _run("desktop-assistant", "assistant.py")
+
+
+def granola_engineer() -> None:
+    _run("granola-engineer", "granola_engineer.py")
