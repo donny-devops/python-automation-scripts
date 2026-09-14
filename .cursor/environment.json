@@ -1,0 +1,4 @@
+{
+  "name": "Python Automation Scripts",
+  "install": "bash .cursor/install.sh"
+}
