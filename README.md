@@ -1,204 +1,105 @@
 # Python Automation Scripts
 
-A curated collection of **Python-based automation scripts** for DevOps, system administration, data workflows, and everyday productivity.
+Production-oriented Python tools for scraping, desktop assistance, and gamified task tracking.
 
-## Overview
+## What's in this repository
 
-This repository contains modular, production-ready scripts that automate repetitive tasks such as file management, log processing, API integrations, backups, and scheduled jobs.
+| Tool | Path | Purpose |
+| --- | --- | --- |
+| Web scraper | `web-scraper/` | Category-aware HTML extraction with SSRF guards, retries, and JSON/CSV/Excel export |
+| Desktop assistant | `desktop-assistant/` | Claude-powered local assistant with reminders, stats, and notifications |
+| To-Dojo | `to-dojo/` | Ranked task manager with streaks, achievements, and an optional CLI |
 
-Each script is:
-- Focused on a single responsibility
-- Configurable via environment variables or CLI arguments
-- Documented with usage examples
-- Designed to be easily extended or composed into larger workflows
+Python 3.10+ is required.
 
-## Features
+## Security defaults
 
-- File and directory automation (cleanup, archival, organization)
-- Log rotation and parsing helpers
-- API integration utilities (REST, webhooks, simple polling)
-- Backup and sync helpers (local and remote targets)
-- CLI wrappers with argparse / Typer / Click
-- Cross-platform friendly (Linux, macOS, Windows where possible)
-- Ready for cron, systemd timers, or task schedulers
+- Scrape targets must be `http` or `https`. Loopback, link-local, metadata, and private ranges are blocked unless you pass `--allow-private`.
+- Redirects are followed only after the next URL is re-checked.
+- Responses are capped (`SCRAPER_MAX_BYTES`, default 5 MB).
+- `robots.txt` is respected unless `SCRAPER_RESPECT_ROBOTS=false`.
+- The assistant redacts obvious API tokens before sending clipboard text to the model.
+- To-Dojo writes state atomically and quarantines corrupt JSON instead of crashing.
 
-## Repository Structure
+Do not scrape sites you are not allowed to access. Honor terms of service and rate limits.
 
-```bash
-python-automation-scripts/
-├── README.md
-├── scripts/
-│   ├── backup/
-│   ├── file_ops/
-│   ├── logs/
-│   ├── network/
-│   └── misc/
-├── config/
-│   └── examples/
-├── tests/
-└── requirements.txt
-```
-
-### Scripts
-
-Organize scripts into logical groups under `scripts/`:
-
-- `backup/` — database exports, directory backups, rotation
-- `file_ops/` — cleanup, rename, move, compress, checksum
-- `logs/` — log rotation, parsing, filtering, alerting hooks
-- `network/` — HTTP checks, simple uptime pings, API utilities
-- `misc/` — one-off helpers and utilities
-
-## Getting Started
-
-### Prerequisites
-
-- Python 3.10+ recommended
-- `pip`, `uv`, or `pipx` for dependency management
-
-### Installation
-
-Clone the repository and install dependencies:
+## Setup
 
 ```bash
-git clone https://github.com/your-username/python-automation-scripts.git
+git clone https://github.com/donny-devops/python-automation-scripts.git
 cd python-automation-scripts
+python -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-Optionally, install in editable mode for development:
+Install extra dependencies only for the tool you are running:
 
 ```bash
-pip install -e .
+pip install -r web-scraper/requirements.txt
+pip install -r desktop-assistant/requirements.txt
+pip install -r to-dojo/requirements.txt
 ```
 
-## Usage
+Copy the matching `.env.example` to `.env` and fill in values. Never commit secrets.
 
-Most scripts can be run directly from the `scripts/` directory or via a wrapper entrypoint.
-
-### General pattern
+## Web scraper
 
 ```bash
-python scripts/<category>/<script_name>.py --help
+python web-scraper/scraper.py --help
+python web-scraper/scraper.py --dry-run --url https://example.com
+python web-scraper/scraper.py --category news --url https://example.com --format json
+python web-scraper/scraper.py --config web-scraper/config.example.json
 ```
 
-Example:
+Categories: `ecommerce`, `news`, `jobs`, `real_estate`, `finance`, `social`, `weather`, `generic`.
+
+Useful flags:
+
+- `--dry-run` — validate the URL and plan the fetch without downloading
+- `--js` — render with Playwright
+- `--allow-private` — permit intranet/loopback targets
+- `--schedule MINUTES` — repeat on an interval
+
+## Desktop assistant
 
 ```bash
-python scripts/file_ops/cleanup_temp_files.py --path /tmp --days 7
+cp desktop-assistant/.env.example desktop-assistant/.env
+python desktop-assistant/assistant.py --text
+python desktop-assistant/assistant.py --notify
 ```
 
-### Environment Variables
+`ANTHROPIC_API_KEY` is required at runtime, not at import. Commands: `quit`, `clear`, `stats`.
 
-Many scripts can be configured via environment variables. Example `.env` snippet:
+## To-Dojo
 
-```env
-BACKUP_SOURCE=/var/data
-BACKUP_DEST=s3://my-bucket/backups
-BACKUP_RETENTION_DAYS=14
-LOG_LEVEL=INFO
+Interactive:
+
+```bash
+python to-dojo/to_dojo.py
 ```
 
-Use tools like `direnv`, `dotenv`, or your scheduler’s environment configuration to load these.
+Non-interactive:
 
-## Scheduling
-
-These automation scripts are designed to be used with common schedulers:
-
-- cron (Linux/macOS)
-- systemd timers
-- Windows Task Scheduler
-- Containerized jobs (Docker, Kubernetes CronJobs)
-
-Example cron entry (run every night at 2:30):
-
-```cron
-30 2 * * * /usr/bin/python /opt/python-automation-scripts/scripts/backup/run_nightly_backup.py >> /var/log/backup.log 2>&1
+```bash
+python to-dojo/to_dojo.py add "Write tests" --priority high
+python to-dojo/to_dojo.py list
+python to-dojo/to_dojo.py complete 1
+python to-dojo/to_dojo.py stats
 ```
 
-## Configuration & Secrets
-
-- Store non-sensitive defaults in `config/` or `.env.example`
-- Use environment variables for secrets (tokens, passwords, keys)
-- Prefer secret managers (AWS Secrets Manager, HashiCorp Vault, Azure Key Vault, etc.) in production
-
-Example configuration pattern inside a script:
-
-```python
-import os
-
-BACKUP_SOURCE = os.getenv("BACKUP_SOURCE", "/var/data")
-BACKUP_DEST = os.getenv("BACKUP_DEST", "./backups")
-RETENTION_DAYS = int(os.getenv("BACKUP_RETENTION_DAYS", "14"))
-```
+State is stored in `dojo_data.json` (override with `--data-file` or `DOJO_DATA_FILE`). Streaks increase only when you complete a task, not when you open the app.
 
 ## Development
 
-### Code Style
-
-- Follow PEP 8 and type hints where practical
-- Prefer `pathlib` over raw `os.path`
-- Use structured logging for long-running jobs
-
-### Recommended Tooling
-
 ```bash
-pip install -r requirements-dev.txt
-
-# Linting and formatting
+pip install -r requirements.txt
 ruff check .
-ruff format .
-
-# Type checking
-mypy scripts
-
-# Tests
 pytest
 ```
 
-## Testing
-
-Each script should include:
-
-- Unit tests for core logic
-- Safe dry-run options where destructive actions are possible
-- Clear logging for success and failure paths
-
-Example dry-run flag pattern:
-
-```python
-parser.add_argument(
-    "--dry-run",
-    action="store_true",
-    help="Show actions without executing them",
-)
-```
-
-## Examples
-
-Consider adding a dedicated `examples/` or `recipes/` section with:
-
-- Sample automation workflows (e.g., log cleanup + backup + notification)
-- Example config files per environment
-- Example scheduler definitions (cron, systemd, Kubernetes CronJob YAML)
-
-## Roadmap
-
-- Add richer CLI UX with Typer or Click
-- Provide Dockerfile for running scripts as containers
-- Add observability hooks (metrics, tracing, structured logs)
-- Add integration examples with GitHub Actions or other CI tools
-- Publish selected scripts as pip-installable tools
+CI runs Ruff, pytest, Bandit, pip-audit, and secret scanning through the AgentOps fleet workflow.
 
 ## License
 
-Choose a license that fits your intended use, such as MIT, Apache-2.0, or a private internal license.
-
-## Notes
-
-To make this repository portfolio-ready, consider adding:
-
-- Detailed per-script documentation under `docs/`
-- Architecture and flow diagrams
-- Example screenshots of logs, dashboards, or CI runs
-- Security considerations and safeguard patterns (dry runs, confirmations)
+MIT. See `LICENSE` and `SECURITY.md` for disclosure instructions.

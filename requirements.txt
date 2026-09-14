@@ -1,0 +1,12 @@
+# Shared / CI test dependencies. Install per-tool extras from each folder
+# when running that script (Playwright, Anthropic, speech, etc.).
+pytest>=8.3
+ruff>=0.6
+requests>=2.32.3
+urllib3>=2.7.0
+beautifulsoup4>=4.12.3
+lxml>=5.3
+pandas>=2.2.2
+python-dotenv>=1.0.1
+tenacity>=9.0.0
+rich>=13.9.0

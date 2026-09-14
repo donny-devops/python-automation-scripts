@@ -39,6 +39,12 @@ htmlcov/
 *.log
 logs/
 
+# Runtime output
+output/
+dojo_data.json
+dojo_data.json.tmp
+*.xlsx
+
 # OS
 .DS_Store
 Thumbs.db

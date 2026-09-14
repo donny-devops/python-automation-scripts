@@ -1,0 +1,10 @@
+[
+  {
+    "category": "generic",
+    "url": "https://example.com",
+    "selectors": {
+      "title": "title",
+      "headings": "h1"
+    }
+  }
+]

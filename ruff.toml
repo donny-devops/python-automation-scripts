@@ -1,0 +1,7 @@
+target-version = "py310"
+line-length = 100
+exclude = [".git", ".venv", "venv", "build", "dist"]
+
+[lint]
+# Match `ruff check` defaults used by AgentOps CI: pycodestyle errors + pyflakes.
+select = ["E4", "E7", "E9", "F"]
