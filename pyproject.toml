@@ -55,17 +55,21 @@ dojo = [
   "python-dotenv>=1.0.1",
   "anthropic>=0.40.0",
 ]
+granola = [
+  "rich>=13.9.0",
+]
 
 [project.scripts]
 web-scraper = "python_automation_scripts.cli:web_scraper"
 to-dojo = "python_automation_scripts.cli:to_dojo"
 desktop-assistant = "python_automation_scripts.cli:desktop_assistant"
+granola-engineer = "python_automation_scripts.cli:granola_engineer"
 
 [tool.setuptools.packages.find]
 include = ["python_automation_scripts*"]
 
 [tool.pytest.ini_options]
-pythonpath = ["web-scraper", "desktop-assistant", "to-dojo"]
+pythonpath = ["web-scraper", "desktop-assistant", "to-dojo", "granola-engineer"]
 testpaths = ["tests"]
 addopts = "-q"
 
