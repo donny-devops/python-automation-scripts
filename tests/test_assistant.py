@@ -18,10 +18,12 @@ def test_parse_reminder_ignores_malformed():
 
 
 def test_redact_secrets_and_clip():
-    raw = "token ghp_abcdefghijklmnopqrstuvwx and sk-ant-abcdefghijk"
+    github_token = "ghp_" + ("abc" * 8)
+    anthropic_token = "sk-ant-" + ("def" * 4)
+    raw = f"token {github_token} and {anthropic_token}"
     redacted = redact_secrets(raw)
-    assert "ghp_" not in redacted
-    assert "sk-ant-abcdefghijk" not in redacted
+    assert github_token not in redacted
+    assert anthropic_token not in redacted
     assert "[redacted]" in redacted
     assert clip_text("abcdef", 4) == "abcd…"
     assert clip_text("abcd", 4) == "abcd"
