@@ -6,19 +6,18 @@ Categories supported:
   2. News / Media    — headlines, articles, authors, dates
   3. Jobs            — listings, companies, salaries, locations
   4. Real Estate     — listings, prices, specs, agents
-  5. Social / Forums — posts, threads, upvotes, authors
+  5. Social / Forums — posts, threads, scores, authors
   6. Finance         — stock quotes, crypto, exchange rates
   7. Weather         — forecasts, conditions, alerts
-  8. Government      — public records, filings, datasets
-  9. Academic        — papers, citations, authors, abstracts
-  10. Generic        — configurable CSS/XPath extraction
+  8. Generic         — configurable CSS extraction
 
 Features:
   • Static (requests + BS4) and dynamic (Playwright) rendering modes
   • Rotating user-agents, optional proxy support
-  • Retry with exponential backoff
-  • Rate limiting per domain
-  • Output: JSON, CSV, Excel, MongoDB, Postgres
+  • Retry with exponential backoff and per-domain rate limiting
+  • SSRF guards (http/https only; private hosts blocked unless --allow-private)
+  • robots.txt respect, response size limits, redirect checks
+  • Output: JSON, CSV, Excel
   • Scheduled scraping via schedule
   • Rich console progress display
 
@@ -27,6 +26,7 @@ Usage:
   python scraper.py --category news      --url https://news.example.com
   python scraper.py --category jobs      --url https://jobs.example.com
   python scraper.py --config job.json    # run from config file
+  python scraper.py --dry-run --url https://example.com
   python scraper.py --schedule 30        # run every 30 minutes
 """
 
@@ -44,16 +44,23 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse, urljoin
+from urllib.robotparser import RobotFileParser
 
 import requests
-import pandas as pd
-import schedule
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
-from fake_useragent import UserAgent
 from rich.console import Console
 from rich.table import Table
 from tenacity import retry, stop_after_attempt, wait_exponential
+
+from safety import (
+    UnsafeURLError,
+    assert_safe_proxy,
+    assert_safe_url,
+    max_redirects,
+    max_response_bytes,
+    resolve_redirect,
+)
 
 load_dotenv()
 
@@ -64,14 +71,19 @@ console = Console()
 DELAY_MIN = float(os.getenv("SCRAPER_DELAY_MIN", 1.0))
 DELAY_MAX = float(os.getenv("SCRAPER_DELAY_MAX", 3.0))
 MAX_RETRIES = int(os.getenv("SCRAPER_MAX_RETRIES", 3))
-CONCURRENCY = int(os.getenv("SCRAPER_CONCURRENCY", 5))
 OUTPUT_DIR = Path(os.getenv("SCRAPER_OUTPUT_DIR", "./output"))
 HEADLESS = os.getenv("SCRAPER_HEADLESS", "true").lower() == "true"
 PROXY_URL = os.getenv("PROXY_URL", "")
 USER_AGENT = os.getenv("SCRAPER_USER_AGENT", "random")
+RESPECT_ROBOTS = os.getenv("SCRAPER_RESPECT_ROBOTS", "true").lower() == "true"
 
-OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-ua = UserAgent()
+DEFAULT_UA = (
+    "Mozilla/5.0 (compatible; PythonAutomationScripts/1.0; +https://github.com/donny-devops/python-automation-scripts)"
+)
+_SESSION: requests.Session | None = None
+_UA = None
+_LAST_HIT: dict[str, float] = {}
+_ROBOTS_CACHE: dict[str, RobotFileParser | None] = {}
 
 
 # ── Data Models ───────────────────────────────────────────────────────────────
@@ -94,14 +106,25 @@ class ScrapedItem:
 # ── HTTP Helpers ──────────────────────────────────────────────────────────────
 
 
+def _user_agent() -> str:
+    global _UA
+    if USER_AGENT == "default":
+        return DEFAULT_UA
+    if USER_AGENT and USER_AGENT != "random":
+        return USER_AGENT
+    try:
+        from fake_useragent import UserAgent
+
+        if _UA is None:
+            _UA = UserAgent()
+        return _UA.random
+    except Exception:
+        return DEFAULT_UA
+
+
 def get_headers() -> dict:
-    agent = (
-        ua.random
-        if USER_AGENT == "random"
-        else requests.utils.default_headers()["User-Agent"]
-    )
     return {
-        "User-Agent": agent,
+        "User-Agent": _user_agent(),
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.5",
         "Accept-Encoding": "gzip, deflate, br",
@@ -111,40 +134,140 @@ def get_headers() -> dict:
     }
 
 
-def polite_delay():
-    time.sleep(random.uniform(DELAY_MIN, DELAY_MAX))
+def get_session() -> requests.Session:
+    global _SESSION
+    if _SESSION is None:
+        _SESSION = requests.Session()
+        adapter = requests.adapters.HTTPAdapter(pool_connections=8, pool_maxsize=8)
+        _SESSION.mount("http://", adapter)
+        _SESSION.mount("https://", adapter)
+    return _SESSION
+
+
+def _proxies() -> dict | None:
+    proxy = assert_safe_proxy(PROXY_URL)
+    if not proxy:
+        return None
+    return {"http": proxy, "https": proxy}
+
+
+def polite_delay(url: str = "") -> None:
+    domain = urlparse(url).netloc if url else ""
+    elapsed = time.monotonic() - _LAST_HIT.get(domain, 0.0)
+    wait_for = random.uniform(DELAY_MIN, DELAY_MAX) - elapsed
+    if wait_for > 0:
+        time.sleep(wait_for)
+    _LAST_HIT[domain] = time.monotonic()
+
+
+def allowed_by_robots(url: str, *, allow_private: bool = False) -> bool:
+    if not RESPECT_ROBOTS:
+        return True
+    parsed = urlparse(url)
+    robots_url = f"{parsed.scheme}://{parsed.netloc}/robots.txt"
+    if robots_url not in _ROBOTS_CACHE:
+        rp = RobotFileParser()
+        rp.set_url(robots_url)
+        try:
+            assert_safe_url(robots_url, allow_private=allow_private)
+            polite_delay(robots_url)
+            resp = get_session().get(
+                robots_url,
+                headers=get_headers(),
+                proxies=_proxies(),
+                timeout=10,
+                allow_redirects=False,
+                stream=True,
+            )
+            if resp.status_code >= 400:
+                _ROBOTS_CACHE[robots_url] = None
+                return True
+            rp.parse(_read_limited(resp).splitlines())
+            _ROBOTS_CACHE[robots_url] = rp
+        except Exception:
+            _ROBOTS_CACHE[robots_url] = None
+            return True
+    rp = _ROBOTS_CACHE[robots_url]
+    if rp is None:
+        return True
+    return rp.can_fetch(_user_agent(), url)
+
+
+def _read_limited(resp: requests.Response) -> str:
+    limit = max_response_bytes()
+    chunks: list[bytes] = []
+    total = 0
+    for chunk in resp.iter_content(chunk_size=8192):
+        if not chunk:
+            continue
+        total += len(chunk)
+        if total > limit:
+            resp.close()
+            raise ValueError(f"Response exceeds {limit} byte limit")
+        chunks.append(chunk)
+    encoding = resp.encoding or "utf-8"
+    return b"".join(chunks).decode(encoding, errors="replace")
+
+
+def compute_discount(price: str, original: str) -> str:
+    try:
+        p = float(re.sub(r"[^\d.]", "", price or ""))
+        op = float(re.sub(r"[^\d.]", "", original or ""))
+        if op > p > 0:
+            return f"{round((op - p) / op * 100)}%"
+    except (TypeError, ValueError):
+        return ""
+    return ""
 
 
 @retry(
     stop=stop_after_attempt(MAX_RETRIES),
     wait=wait_exponential(multiplier=1, min=2, max=10),
+    reraise=True,
 )
-def fetch_static(url: str) -> BeautifulSoup:
-    proxies = {"http": PROXY_URL, "https": PROXY_URL} if PROXY_URL else None
-    resp = requests.get(url, headers=get_headers(), proxies=proxies, timeout=15)
-    resp.raise_for_status()
-    polite_delay()
-    return BeautifulSoup(resp.text, "lxml")
+def fetch_static(url: str, *, allow_private: bool = False) -> BeautifulSoup:
+    current = assert_safe_url(url, allow_private=allow_private)
+    session = get_session()
+    for _ in range(max_redirects() + 1):
+        polite_delay(current)
+        resp = session.get(
+            current,
+            headers=get_headers(),
+            proxies=_proxies(),
+            timeout=15,
+            allow_redirects=False,
+            stream=True,
+        )
+        if resp.is_redirect or resp.status_code in {301, 302, 303, 307, 308}:
+            location = resp.headers.get("Location", "")
+            resp.close()
+            current = resolve_redirect(current, location, allow_private=allow_private)
+            continue
+        resp.raise_for_status()
+        html = _read_limited(resp)
+        return BeautifulSoup(html, "lxml")
+    raise ValueError("Too many redirects")
 
 
-async def fetch_dynamic(url: str) -> BeautifulSoup:
+async def fetch_dynamic(url: str, *, allow_private: bool = False) -> BeautifulSoup:
     from playwright.async_api import async_playwright
 
+    target = assert_safe_url(url, allow_private=allow_private)
+    polite_delay(target)
+    launch_kwargs: dict = {"headless": HEADLESS}
+    proxy = assert_safe_proxy(PROXY_URL)
+    if proxy:
+        launch_kwargs["proxy"] = {"server": proxy}
+
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=HEADLESS)
-        page = await browser.new_page(extra_http_headers=get_headers())
-        if PROXY_URL:
+        browser = await p.chromium.launch(**launch_kwargs)
+        try:
+            page = await browser.new_page(extra_http_headers=get_headers())
+            await page.goto(target, wait_until="networkidle", timeout=30000)
+            await page.wait_for_timeout(2000)
+            html = await page.content()
+        finally:
             await browser.close()
-            browser = await p.chromium.launch(
-                headless=HEADLESS,
-                proxy={"server": PROXY_URL},
-            )
-            page = await browser.new_page()
-        await page.goto(url, wait_until="networkidle", timeout=30000)
-        await page.wait_for_timeout(2000)
-        html = await page.content()
-        await browser.close()
-    polite_delay()
     return BeautifulSoup(html, "lxml")
 
 
@@ -163,14 +286,25 @@ class BaseScraper(ABC):
     category: str = "generic"
     requires_js: bool = False
 
-    def __init__(self, url: str):
+    def __init__(
+        self,
+        url: str,
+        *,
+        js: bool = False,
+        allow_private: bool = False,
+        dry_run: bool = False,
+    ):
         self.url = url
         self.base = f"{urlparse(url).scheme}://{urlparse(url).netloc}"
+        self.force_js = js
+        self.allow_private = allow_private
+        self.dry_run = dry_run
 
     def get_soup(self) -> BeautifulSoup:
-        if self.requires_js:
-            return asyncio.run(fetch_dynamic(self.url))
-        return fetch_static(self.url)
+        use_js = self.force_js or self.requires_js
+        if use_js:
+            return asyncio.run(fetch_dynamic(self.url, allow_private=self.allow_private))
+        return fetch_static(self.url, allow_private=self.allow_private)
 
     @abstractmethod
     def parse(self, soup: BeautifulSoup) -> list[dict]:
@@ -178,8 +312,16 @@ class BaseScraper(ABC):
         ...
 
     def scrape(self) -> list[ScrapedItem]:
-        items = []
+        items: list[ScrapedItem] = []
         try:
+            assert_safe_url(self.url, allow_private=self.allow_private)
+            if self.dry_run:
+                console.print(
+                    f"[yellow]dry-run[/] [{self.category}] would fetch {self.url}"
+                )
+                return items
+            if not allowed_by_robots(self.url, allow_private=self.allow_private):
+                raise UnsafeURLError(f"robots.txt disallows fetching {self.url}")
             soup = self.get_soup()
             records = self.parse(soup)
             for r in records:
@@ -187,6 +329,8 @@ class BaseScraper(ABC):
             console.print(
                 f"[green]✓[/] [{self.category}] {len(items)} items from {self.url}"
             )
+        except UnsafeURLError:
+            raise
         except Exception as e:
             console.print(f"[red]✗[/] [{self.category}] {self.url} — {e}")
             items.append(
@@ -261,15 +405,7 @@ class EcommerceScraper(BaseScraper):
             if not name:
                 continue
 
-            # Compute discount %
-            discount = ""
-            try:
-                p = float(re.sub(r"[^\d.]", "", price))
-                op = float(re.sub(r"[^\d.]", "", orig))
-                if op > p > 0:
-                    discount = f"{round((op - p) / op * 100)}%"
-            except Exception:
-                pass
+            discount = compute_discount(price, orig)
 
             items.append(
                 {
@@ -397,10 +533,8 @@ class JobsScraper(BaseScraper):
             ]
             link_el = card.select_one("a[href]")
             link = urljoin(self.base, safe_attr(link_el, "href")) if link_el else ""
-            is_remote = any(
-                kw in location.lower() or kw in title.lower()
-                for kw in self.REMOTE_KEYWORDS
-            )
+            haystack = f"{location} {title} {job_type}".lower()
+            is_remote = any(kw in haystack for kw in self.REMOTE_KEYWORDS)
 
             if not title:
                 continue
@@ -517,6 +651,91 @@ class FinanceScraper(BaseScraper):
         return items
 
 
+class SocialScraper(BaseScraper):
+    """
+    Category: Social / Forums
+    Extracts: author, title/body, score, comment count, posted date, permalink.
+    """
+
+    category = "social"
+
+    def parse(self, soup: BeautifulSoup) -> list[dict]:
+        items = []
+        cards = (
+            soup.select("[class*='post-card']")
+            or soup.select("[class*='thread']")
+            or soup.select("article")
+            or soup.select("[data-testid*='post']")
+        )
+        for card in cards:
+            title = safe_text(card.select_one("h1, h2, h3, [class*='title']"))
+            body = safe_text(
+                card.select_one("[class*='body'], [class*='content'], p")
+            )
+            author = safe_text(
+                card.select_one("[class*='author'], [class*='user'], [rel='author']")
+            )
+            score = safe_text(
+                card.select_one("[class*='score'], [class*='upvote'], [class*='votes']")
+            )
+            comments = safe_text(
+                card.select_one("[class*='comment'], [class*='replies']")
+            )
+            date_el = card.select_one("time, [class*='date']")
+            posted = safe_attr(date_el, "datetime") or safe_text(date_el)
+            link_el = card.select_one("a[href]")
+            link = urljoin(self.base, safe_attr(link_el, "href")) if link_el else ""
+            if not title and not body:
+                continue
+            items.append(
+                {
+                    "title": title,
+                    "body": body[:400],
+                    "author": author,
+                    "score": score,
+                    "comments": comments,
+                    "posted_at": posted,
+                    "permalink": link,
+                }
+            )
+        return items
+
+
+class WeatherScraper(BaseScraper):
+    """
+    Category: Weather
+    Extracts: location, condition, temperature, humidity, wind, alert text.
+    """
+
+    category = "weather"
+
+    def parse(self, soup: BeautifulSoup) -> list[dict]:
+        location = safe_text(
+            soup.select_one("[class*='location'], [class*='city'], h1")
+        )
+        condition = safe_text(
+            soup.select_one("[class*='condition'], [class*='weather-desc'], [class*='summary']")
+        )
+        temp = safe_text(
+            soup.select_one("[class*='temp'], [class*='temperature'], [data-testid*='temp']")
+        )
+        humidity = safe_text(soup.select_one("[class*='humidity']"))
+        wind = safe_text(soup.select_one("[class*='wind']"))
+        alert = safe_text(soup.select_one("[class*='alert'], [class*='warning']"))
+        if not any((location, condition, temp)):
+            return []
+        return [
+            {
+                "location": location,
+                "condition": condition,
+                "temperature": temp,
+                "humidity": humidity,
+                "wind": wind,
+                "alert": alert,
+            }
+        ]
+
+
 class GenericScraper(BaseScraper):
     """
     Category: Generic / Custom
@@ -526,8 +745,16 @@ class GenericScraper(BaseScraper):
 
     category = "generic"
 
-    def __init__(self, url: str, selectors: dict | None = None):
-        super().__init__(url)
+    def __init__(
+        self,
+        url: str,
+        selectors: dict | None = None,
+        *,
+        js: bool = False,
+        allow_private: bool = False,
+        dry_run: bool = False,
+    ):
+        super().__init__(url, js=js, allow_private=allow_private, dry_run=dry_run)
         self.selectors = selectors or {}
 
     def parse(self, soup: BeautifulSoup) -> list[dict]:
@@ -584,6 +811,8 @@ SCRAPERS: dict[str, type[BaseScraper]] = {
     "jobs": JobsScraper,
     "real_estate": RealEstateScraper,
     "finance": FinanceScraper,
+    "social": SocialScraper,
+    "weather": WeatherScraper,
     "generic": GenericScraper,
 }
 
@@ -594,7 +823,8 @@ SCRAPERS: dict[str, type[BaseScraper]] = {
 def export(items: list[ScrapedItem], fmt: str, category: str):
     if not items:
         return
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     base = OUTPUT_DIR / f"{category}_{ts}"
     rows = [
         {
@@ -609,18 +839,21 @@ def export(items: list[ScrapedItem], fmt: str, category: str):
 
     if fmt in ("json", "all"):
         path = base.with_suffix(".json")
-        path.write_text(json.dumps(rows, indent=2, ensure_ascii=False))
+        path.write_text(json.dumps(rows, indent=2, ensure_ascii=False), encoding="utf-8")
         console.print(f"[cyan]→ JSON:[/] {path}")
 
-    if fmt in ("csv", "all"):
-        path = base.with_suffix(".csv")
-        pd.DataFrame(rows).to_csv(path, index=False)
-        console.print(f"[cyan]→ CSV:[/] {path}")
+    if fmt in ("csv", "excel", "all"):
+        import pandas as pd
 
-    if fmt in ("excel", "all"):
-        path = base.with_suffix(".xlsx")
-        pd.DataFrame(rows).to_excel(path, index=False)
-        console.print(f"[cyan]→ Excel:[/] {path}")
+        frame = pd.DataFrame(rows)
+        if fmt in ("csv", "all"):
+            path = base.with_suffix(".csv")
+            frame.to_csv(path, index=False)
+            console.print(f"[cyan]→ CSV:[/] {path}")
+        if fmt in ("excel", "all"):
+            path = base.with_suffix(".xlsx")
+            frame.to_excel(path, index=False)
+            console.print(f"[cyan]→ Excel:[/] {path}")
 
 
 def print_table(items: list[ScrapedItem]):
@@ -639,25 +872,78 @@ def print_table(items: list[ScrapedItem]):
 # ── Runner ────────────────────────────────────────────────────────────────────
 
 
-def run_scrape(category: str, url: str, fmt: str = "json"):
+def run_scrape(
+    category: str,
+    url: str,
+    fmt: str = "json",
+    *,
+    js: bool = False,
+    allow_private: bool = False,
+    dry_run: bool = False,
+    selectors: dict | None = None,
+):
     ScraperClass = SCRAPERS.get(category, GenericScraper)
-    scraper = ScraperClass(url)
+    if ScraperClass is GenericScraper:
+        scraper = GenericScraper(
+            url, selectors=selectors, js=js, allow_private=allow_private, dry_run=dry_run
+        )
+    else:
+        scraper = ScraperClass(url, js=js, allow_private=allow_private, dry_run=dry_run)
     items = scraper.scrape()
-    print_table(items)
-    export(items, fmt, category)
+    if not dry_run:
+        print_table(items)
+        export(items, fmt, category)
     return items
 
 
-def run_from_config(config_path: str, fmt: str = "json"):
-    config = json.loads(Path(config_path).read_text())
+def _normalize_jobs(config) -> list[dict]:
     jobs = config if isinstance(config, list) else [config]
-    for job in jobs:
-        run_scrape(job["category"], job["url"], fmt)
+    normalized = []
+    for idx, job in enumerate(jobs, start=1):
+        if not isinstance(job, dict):
+            raise ValueError(f"Config job #{idx} must be an object")
+        url = job.get("url")
+        if not url or not isinstance(url, str):
+            raise ValueError(f"Config job #{idx} is missing a string 'url'")
+        category = job.get("category", "generic")
+        if category not in SCRAPERS:
+            raise ValueError(f"Config job #{idx} has unknown category {category!r}")
+        selectors = job.get("selectors")
+        if selectors is not None and not isinstance(selectors, dict):
+            raise ValueError(f"Config job #{idx} selectors must be an object")
+        normalized.append(
+            {"category": category, "url": url.strip(), "selectors": selectors}
+        )
+    if not normalized:
+        raise ValueError("Config did not contain any jobs")
+    return normalized
 
 
-# ── Entry Point ───────────────────────────────────────────────────────────────
+def run_from_config(
+    config_path: str,
+    fmt: str = "json",
+    *,
+    js: bool = False,
+    allow_private: bool = False,
+    dry_run: bool = False,
+):
+    path = Path(config_path)
+    if not path.is_file():
+        raise FileNotFoundError(f"Config file not found: {config_path}")
+    config = json.loads(path.read_text(encoding="utf-8"))
+    for job in _normalize_jobs(config):
+        run_scrape(
+            job["category"],
+            job["url"],
+            fmt,
+            js=js,
+            allow_private=allow_private,
+            dry_run=dry_run,
+            selectors=job["selectors"],
+        )
 
-if __name__ == "__main__":
+
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Automated Web Scraper")
     parser.add_argument("--category", choices=list(SCRAPERS.keys()), default="generic")
     parser.add_argument("--url", type=str, help="Target URL")
@@ -668,23 +954,62 @@ if __name__ == "__main__":
     parser.add_argument(
         "--schedule", type=int, metavar="MINUTES", help="Repeat every N minutes"
     )
-    args = parser.parse_args()
+    parser.add_argument(
+        "--js", action="store_true", help="Force Playwright rendering"
+    )
+    parser.add_argument(
+        "--allow-private",
+        action="store_true",
+        help="Allow private/loopback scrape targets (off by default)",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Validate inputs and show planned fetches without downloading",
+    )
+    args = parser.parse_args(argv)
 
     def job():
         if args.config:
-            run_from_config(args.config, args.format)
+            run_from_config(
+                args.config,
+                args.format,
+                js=args.js,
+                allow_private=args.allow_private,
+                dry_run=args.dry_run,
+            )
         elif args.url:
-            run_scrape(args.category, args.url, args.format)
+            run_scrape(
+                args.category,
+                args.url,
+                args.format,
+                js=args.js,
+                allow_private=args.allow_private,
+                dry_run=args.dry_run,
+            )
         else:
             parser.print_help()
-            sys.exit(1)
+            raise SystemExit(1)
 
-    if args.schedule:
-        console.print(f"[yellow]Scheduled:[/] running every {args.schedule} minutes")
-        schedule.every(args.schedule).minutes.do(job)
-        job()
-        while True:
-            schedule.run_pending()
-            time.sleep(30)
-    else:
-        job()
+    try:
+        if args.schedule:
+            import schedule
+
+            if args.schedule < 1:
+                raise ValueError("Schedule interval must be at least 1 minute")
+            console.print(f"[yellow]Scheduled:[/] running every {args.schedule} minutes")
+            schedule.every(args.schedule).minutes.do(job)
+            job()
+            while True:
+                schedule.run_pending()
+                time.sleep(30)
+        else:
+            job()
+    except (UnsafeURLError, ValueError, FileNotFoundError, json.JSONDecodeError) as exc:
+        console.print(f"[red]{exc}[/]")
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

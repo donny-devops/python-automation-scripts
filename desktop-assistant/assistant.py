@@ -6,10 +6,9 @@ Features:
   • Voice input (microphone) + text input fallback
   • Text-to-speech responses via pyttsx3
   • Desktop notifications via plyer
-  • Scheduled automated notifications (reminders, weather, daily briefing)
-  • System _stats monitoring (CPU, memory, disk)
-  • Clipboard reading / summarisation
-  • Screenshot description (AI vision)
+  • Scheduled automated notifications (reminders, daily briefing)
+  • System stats monitoring (CPU, memory, disk)
+  • Clipboard reading / summarisation with secret redaction
 
 Usage:
   python assistant.py            # interactive mode
@@ -17,65 +16,82 @@ Usage:
   python assistant.py --notify   # run notification scheduler only
 """
 
-import os
-import time
-import threading
+from __future__ import annotations
+
 import argparse
+import os
+import sys
+import threading
+import time
 from datetime import datetime
 
-import anthropic
-import psutil
-import pyperclip
-import schedule
-import pyttsx3
 from dotenv import load_dotenv
-from plyer import notification
+
+from reminders import clip_text, parse_reminder_response, redact_secrets
 
 load_dotenv()
 
 # ── Config ───────────────────────────────────────────────────────────────────
 
-ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
 ASSISTANT_NAME = os.getenv("ASSISTANT_NAME", "Aria")
 VOICE_ENABLED = os.getenv("VOICE_ENABLED", "true").lower() == "true"
 WAKE_WORD = os.getenv("WAKE_WORD", "aria").lower()
-MODEL = "claude-sonnet-4-6"
+MODEL = os.getenv("ASSISTANT_MODEL", "claude-sonnet-4-6")
+HISTORY_LIMIT = max(4, int(os.getenv("ASSISTANT_HISTORY_LIMIT", "20")))
+CLIPBOARD_LIMIT = max(200, int(os.getenv("ASSISTANT_CLIPBOARD_LIMIT", "2000")))
 
 SYSTEM_PROMPT = f"""You are {ASSISTANT_NAME}, a helpful, concise desktop assistant.
-You have access to the user's system _stats and clipboard when they share them.
+You have access to the user's system stats and clipboard when they share them.
 Keep responses short and actionable — this is a desktop assistant, not a chatbot.
 When the user asks you to set a reminder, extract the time and message and reply with:
 REMINDER|<ISO datetime>|<message>
 When the user asks to read their clipboard, they will provide the content — summarise it.
-When the user asks for a system report, they will provide _stats — give a concise health summary."""
+When the user asks for a system report, they will provide stats — give a concise health summary.
+Never request or repeat secrets, API keys, or passwords."""
+
+
+def get_api_key() -> str:
+    key = os.getenv("ANTHROPIC_API_KEY", "").strip()
+    if not key:
+        raise SystemExit(
+            "ANTHROPIC_API_KEY is required. Copy desktop-assistant/.env.example to .env and set the key."
+        )
+    return key
+
 
 # ── TTS Engine ────────────────────────────────────────────────────────────────
 
 
 def build_tts():
-    engine = pyttsx3.init()
-    voices = engine.getProperty("voices")
-    # prefer a female voice if available
-    for v in voices:
-        if (
-            "female" in v.name.lower()
-            or "zira" in v.name.lower()
-            or "hazel" in v.name.lower()
-        ):
-            engine.setProperty("voice", v.id)
-            break
-    engine.setProperty("rate", 175)
-    engine.setProperty("volume", 0.9)
-    return engine
-
-
-def speak(engine, text: str):
     if not VOICE_ENABLED:
+        return None
+    try:
+        import pyttsx3
+
+        engine = pyttsx3.init()
+        voices = engine.getProperty("voices") or []
+        for v in voices:
+            name = getattr(v, "name", "") or ""
+            if any(token in name.lower() for token in ("female", "zira", "hazel")):
+                engine.setProperty("voice", v.id)
+                break
+        engine.setProperty("rate", 175)
+        engine.setProperty("volume", 0.9)
+        return engine
+    except Exception as exc:
+        print(f"[TTS unavailable] {exc}")
+        return None
+
+
+def speak(engine, text: str) -> None:
+    if not engine or not VOICE_ENABLED or not text:
         return
-    # strip markdown before speaking
     clean = text.replace("**", "").replace("*", "").replace("`", "")
-    engine.say(clean)
-    engine.runAndWait()
+    try:
+        engine.say(clean)
+        engine.runAndWait()
+    except Exception as exc:
+        print(f"[TTS error] {exc}")
 
 
 # ── Voice Input ───────────────────────────────────────────────────────────────
@@ -85,16 +101,16 @@ def listen_for_voice(timeout: int = 5) -> str | None:
     try:
         import speech_recognition as sr
 
-        r = sr.Recognizer()
+        recognizer = sr.Recognizer()
         with sr.Microphone() as source:
             print(f"[{ASSISTANT_NAME}] Listening…", end=" ", flush=True)
-            r.adjust_for_ambient_noise(source, duration=0.5)
-            audio = r.listen(source, timeout=timeout, phrase_time_limit=15)
-        text = r.recognize_google(audio)
+            recognizer.adjust_for_ambient_noise(source, duration=0.5)
+            audio = recognizer.listen(source, timeout=timeout, phrase_time_limit=15)
+        text = recognizer.recognize_google(audio)
         print(f"You said: {text}")
         return text
-    except Exception as e:
-        print(f"(voice error: {e})")
+    except Exception as exc:
+        print(f"(voice error: {exc})")
         return None
 
 
@@ -102,7 +118,9 @@ def listen_for_voice(timeout: int = 5) -> str | None:
 
 
 def get_system_stats() -> str:
-    cpu = psutil.cpu_percent(interval=1)
+    import psutil
+
+    cpu = psutil.cpu_percent(interval=0.2)
     mem = psutil.virtual_memory()
     disk = psutil.disk_usage("/")
     boot = datetime.fromtimestamp(psutil.boot_time())
@@ -118,33 +136,21 @@ def get_system_stats() -> str:
 # ── Desktop Notifications ─────────────────────────────────────────────────────
 
 
-def send_notification(title: str, message: str, timeout: int = 8):
+def send_notification(title: str, message: str, timeout: int = 8) -> None:
     try:
+        from plyer import notification
+
         notification.notify(
             title=title,
             message=message[:255],
             app_name=ASSISTANT_NAME,
             timeout=timeout,
         )
-    except Exception as e:
-        print(f"[Notification error] {e}")
+    except Exception as exc:
+        print(f"[Notification error] {exc}")
 
 
-def parse_reminder_response(response: str) -> tuple[datetime, str] | None:
-    """Parse REMINDER|<ISO datetime>|<message> from AI response."""
-    for line in response.splitlines():
-        if line.startswith("REMINDER|"):
-            parts = line.split("|", 2)
-            if len(parts) == 3:
-                try:
-                    dt = datetime.fromisoformat(parts[1])
-                    return dt, parts[2]
-                except ValueError:
-                    pass
-    return None
-
-
-def schedule_reminder(dt: datetime, message: str, engine):
+def schedule_reminder(dt: datetime, message: str, engine) -> None:
     delay = (dt - datetime.now()).total_seconds()
     if delay <= 0:
         send_notification(f"{ASSISTANT_NAME} Reminder", message)
@@ -156,26 +162,22 @@ def schedule_reminder(dt: datetime, message: str, engine):
         print(f"\n[Reminder] {message}")
         speak(engine, f"Reminder: {message}")
 
-    threading.Thread(target=fire, daemon=True).start()
+    threading.Thread(target=fire, daemon=True, name="reminder").start()
     print(f"[Reminder set for {dt.strftime('%H:%M')}] {message}")
 
 
 # ── Scheduled Notifications ───────────────────────────────────────────────────
 
 
-def daily_briefing(client: anthropic.Anthropic, engine):
+def daily_briefing(client, engine) -> None:
     hour = datetime.now().hour
     greeting = (
-        "Good morning"
-        if hour < 12
-        else "Good afternoon"
-        if hour < 17
-        else "Good evening"
+        "Good morning" if hour < 12 else "Good afternoon" if hour < 17 else "Good evening"
     )
     prompt = (
         f"{greeting}! Please give me a very short daily briefing (3 bullets max). "
         f"Today is {datetime.now().strftime('%A, %B %d')}. "
-        "Current system: N/A"
+        "Do not invent news headlines; keep it motivational and practical."
     )
     response = client.messages.create(
         model=MODEL,
@@ -189,9 +191,15 @@ def daily_briefing(client: anthropic.Anthropic, engine):
     print(f"\n[Daily Briefing]\n{text}\n")
 
 
-def system_health_check(engine):
-    cpu = psutil.cpu_percent()
-    mem = psutil.virtual_memory().percent
+def system_health_check(engine) -> None:
+    try:
+        import psutil
+
+        cpu = psutil.cpu_percent(interval=0.2)
+        mem = psutil.virtual_memory().percent
+    except Exception as exc:
+        print(f"[Health check skipped] {exc}")
+        return
     issues = []
     if cpu > 85:
         issues.append(f"CPU at {cpu}%")
@@ -204,12 +212,14 @@ def system_health_check(engine):
         print(f"[Health Alert] {msg}")
 
 
-def hourly_reminder(engine):
+def hourly_reminder(engine) -> None:
     now = datetime.now().strftime("%I:%M %p")
     send_notification(ASSISTANT_NAME, f"It's {now}. Stay focused!")
 
 
-def setup_scheduler(client: anthropic.Anthropic, engine):
+def setup_scheduler(client, engine) -> None:
+    import schedule
+
     schedule.every().day.at("08:00").do(daily_briefing, client, engine)
     schedule.every(30).minutes.do(system_health_check, engine)
     schedule.every().hour.do(hourly_reminder, engine)
@@ -219,10 +229,16 @@ def setup_scheduler(client: anthropic.Anthropic, engine):
             schedule.run_pending()
             time.sleep(30)
 
-    threading.Thread(target=run, daemon=True).start()
+    threading.Thread(target=run, daemon=True, name="scheduler").start()
     print(
         "[Scheduler] Daily briefing @08:00 | Health check every 30m | Hourly pings active"
     )
+
+
+def _build_client():
+    import anthropic
+
+    return anthropic.Anthropic(api_key=get_api_key())
 
 
 # ── Conversation ──────────────────────────────────────────────────────────────
@@ -230,39 +246,51 @@ def setup_scheduler(client: anthropic.Anthropic, engine):
 
 class Assistant:
     def __init__(self, text_only: bool = False):
-        self.client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+        self.client = _build_client()
         self.engine = build_tts()
-        self.history = []
+        self.history: list[dict] = []
         self.text_only = text_only
 
-    def chat(self, user_input: str) -> str:
-        # Inject live context for special commands
-        if any(
-            kw in user_input.lower()
-            for kw in ("system", "cpu", "memory", "ram", "disk", "health")
-        ):
-            user_input += f"\n\n[System _stats: {get_system_stats()}]"
+    def _trim_history(self) -> None:
+        if len(self.history) > HISTORY_LIMIT:
+            self.history = self.history[-HISTORY_LIMIT:]
 
-        if "clipboard" in user_input.lower():
+    def chat(self, user_input: str) -> str:
+        lowered = user_input.lower()
+        if any(kw in lowered for kw in ("system", "cpu", "memory", "ram", "disk", "health")):
             try:
-                clip = pyperclip.paste()
+                user_input += f"\n\n[System stats: {get_system_stats()}]"
+            except Exception as exc:
+                user_input += f"\n\n[System stats unavailable: {exc}]"
+
+        if "clipboard" in lowered:
+            try:
+                import pyperclip
+
+                clip = pyperclip.paste() or ""
                 if clip:
-                    user_input += f"\n\n[Clipboard content:\n{clip[:2000]}]"
+                    safe_clip = clip_text(redact_secrets(clip), CLIPBOARD_LIMIT)
+                    user_input += f"\n\n[Clipboard content:\n{safe_clip}]"
             except Exception:
                 pass
 
         self.history.append({"role": "user", "content": user_input})
+        self._trim_history()
 
-        response = self.client.messages.create(
-            model=MODEL,
-            max_tokens=512,
-            system=SYSTEM_PROMPT,
-            messages=self.history,
-        )
-        reply = response.content[0].text
+        try:
+            response = self.client.messages.create(
+                model=MODEL,
+                max_tokens=512,
+                system=SYSTEM_PROMPT,
+                messages=self.history,
+            )
+            reply = response.content[0].text
+        except Exception as exc:
+            return f"I could not reach the model: {exc}"
+
         self.history.append({"role": "assistant", "content": reply})
+        self._trim_history()
 
-        # Handle reminder directive
         reminder = parse_reminder_response(reply)
         if reminder:
             dt, msg = reminder
@@ -274,19 +302,21 @@ class Assistant:
     def get_input(self) -> str | None:
         if self.text_only:
             return input("You: ").strip()
-        # try voice, fall back to text
         voice = listen_for_voice()
         if voice:
+            if WAKE_WORD and WAKE_WORD not in voice.lower() and len(self.history) == 0:
+                print(f"(say '{WAKE_WORD}' or type in text mode)")
+                return input("You (text): ").strip()
             return voice
         return input("You (text): ").strip()
 
-    def run(self):
+    def run(self) -> None:
         setup_scheduler(self.client, self.engine)
         print(f"\n{'─' * 50}")
         print(f"  {ASSISTANT_NAME} — AI Desktop Assistant")
         print(f"  Model: {MODEL}")
-        print(f"  Voice: {'on' if VOICE_ENABLED else 'off'}")
-        print("  Type 'quit' to exit | 'clear' to reset history")
+        print(f"  Voice: {'on' if VOICE_ENABLED and self.engine else 'off'}")
+        print("  Type 'quit' to exit | 'clear' to reset history | 'stats' for system stats")
         print(f"{'─' * 50}\n")
 
         speak(
@@ -299,15 +329,19 @@ class Assistant:
                 user_input = self.get_input()
                 if not user_input:
                     continue
-                if user_input.lower() in ("quit", "exit", "bye"):
+                lowered = user_input.lower()
+                if lowered in ("quit", "exit", "bye"):
                     speak(self.engine, "Goodbye!")
                     break
-                if user_input.lower() == "clear":
+                if lowered == "clear":
                     self.history = []
                     print("[History cleared]")
                     continue
-                if user_input.lower() == "_stats":
-                    print(get_system_stats())
+                if lowered in ("stats", "_stats"):
+                    try:
+                        print(get_system_stats())
+                    except Exception as exc:
+                        print(f"[stats unavailable] {exc}")
                     continue
 
                 reply = self.chat(user_input)
@@ -317,13 +351,11 @@ class Assistant:
             except KeyboardInterrupt:
                 print("\nGoodbye!")
                 break
-            except Exception as e:
-                print(f"[Error] {e}")
+            except Exception as exc:
+                print(f"[Error] {exc}")
 
 
-# ── Entry Point ───────────────────────────────────────────────────────────────
-
-if __name__ == "__main__":
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=f"{ASSISTANT_NAME} Desktop Assistant")
     parser.add_argument(
         "--text", action="store_true", help="Text-only mode (no microphone)"
@@ -331,10 +363,10 @@ if __name__ == "__main__":
     parser.add_argument(
         "--notify", action="store_true", help="Run notification scheduler only"
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     if args.notify:
-        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+        client = _build_client()
         engine = build_tts()
         setup_scheduler(client, engine)
         print(
@@ -344,7 +376,13 @@ if __name__ == "__main__":
             while True:
                 time.sleep(1)
         except KeyboardInterrupt:
-            pass
-    else:
-        assistant = Assistant(text_only=args.text or not VOICE_ENABLED)
-        assistant.run()
+            return 0
+        return 0
+
+    assistant = Assistant(text_only=args.text or not VOICE_ENABLED)
+    assistant.run()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
