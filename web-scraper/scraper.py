@@ -17,7 +17,8 @@ Features:
   • Retry with exponential backoff and per-domain rate limiting
   • SSRF guards (http/https only; private hosts blocked unless --allow-private)
   • robots.txt respect, response size limits, redirect checks
-  • Output: JSON, CSV, Excel
+  • Output: JSON, JSONL, CSV, Excel
+  • Structured logging for scheduled runs
   • Scheduled scraping via schedule
   • Rich console progress display
 
@@ -38,6 +39,7 @@ import time
 import asyncio
 import random
 import hashlib
+import logging
 import argparse
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -65,6 +67,7 @@ from safety import (
 load_dotenv()
 
 console = Console()
+log = logging.getLogger("web_scraper")
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
@@ -104,6 +107,16 @@ class ScrapedItem:
 
 
 # ── HTTP Helpers ──────────────────────────────────────────────────────────────
+
+
+def configure_logging(level: str) -> None:
+    resolved = getattr(logging, level.upper(), None)
+    if not isinstance(resolved, int):
+        resolved = logging.INFO
+    logging.basicConfig(
+        level=resolved,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
 
 
 def _user_agent() -> str:
@@ -225,8 +238,10 @@ def compute_discount(price: str, original: str) -> str:
     wait=wait_exponential(multiplier=1, min=2, max=10),
     reraise=True,
 )
-def fetch_static(url: str, *, allow_private: bool = False) -> BeautifulSoup:
-    current = assert_safe_url(url, allow_private=allow_private)
+def fetch_static(
+    url: str, *, allow_private: bool = False, allow_hosts: list[str] | None = None
+) -> BeautifulSoup:
+    current = assert_safe_url(url, allow_private=allow_private, allow_hosts=allow_hosts)
     session = get_session()
     for _ in range(max_redirects() + 1):
         polite_delay(current)
@@ -241,7 +256,9 @@ def fetch_static(url: str, *, allow_private: bool = False) -> BeautifulSoup:
         if resp.is_redirect or resp.status_code in {301, 302, 303, 307, 308}:
             location = resp.headers.get("Location", "")
             resp.close()
-            current = resolve_redirect(current, location, allow_private=allow_private)
+            current = resolve_redirect(
+                current, location, allow_private=allow_private, allow_hosts=allow_hosts
+            )
             continue
         resp.raise_for_status()
         html = _read_limited(resp)
@@ -249,10 +266,12 @@ def fetch_static(url: str, *, allow_private: bool = False) -> BeautifulSoup:
     raise ValueError("Too many redirects")
 
 
-async def fetch_dynamic(url: str, *, allow_private: bool = False) -> BeautifulSoup:
+async def fetch_dynamic(
+    url: str, *, allow_private: bool = False, allow_hosts: list[str] | None = None
+) -> BeautifulSoup:
     from playwright.async_api import async_playwright
 
-    target = assert_safe_url(url, allow_private=allow_private)
+    target = assert_safe_url(url, allow_private=allow_private, allow_hosts=allow_hosts)
     polite_delay(target)
     launch_kwargs: dict = {"headless": HEADLESS}
     proxy = assert_safe_proxy(PROXY_URL)
@@ -293,18 +312,28 @@ class BaseScraper(ABC):
         js: bool = False,
         allow_private: bool = False,
         dry_run: bool = False,
+        allow_hosts: list[str] | None = None,
     ):
         self.url = url
         self.base = f"{urlparse(url).scheme}://{urlparse(url).netloc}"
         self.force_js = js
         self.allow_private = allow_private
         self.dry_run = dry_run
+        self.allow_hosts = allow_hosts
 
     def get_soup(self) -> BeautifulSoup:
         use_js = self.force_js or self.requires_js
         if use_js:
-            return asyncio.run(fetch_dynamic(self.url, allow_private=self.allow_private))
-        return fetch_static(self.url, allow_private=self.allow_private)
+            return asyncio.run(
+                fetch_dynamic(
+                    self.url,
+                    allow_private=self.allow_private,
+                    allow_hosts=self.allow_hosts,
+                )
+            )
+        return fetch_static(
+            self.url, allow_private=self.allow_private, allow_hosts=self.allow_hosts
+        )
 
     @abstractmethod
     def parse(self, soup: BeautifulSoup) -> list[dict]:
@@ -314,8 +343,11 @@ class BaseScraper(ABC):
     def scrape(self) -> list[ScrapedItem]:
         items: list[ScrapedItem] = []
         try:
-            assert_safe_url(self.url, allow_private=self.allow_private)
+            assert_safe_url(
+                self.url, allow_private=self.allow_private, allow_hosts=self.allow_hosts
+            )
             if self.dry_run:
+                log.info("dry-run [%s] would fetch %s", self.category, self.url)
                 console.print(
                     f"[yellow]dry-run[/] [{self.category}] would fetch {self.url}"
                 )
@@ -326,12 +358,14 @@ class BaseScraper(ABC):
             records = self.parse(soup)
             for r in records:
                 items.append(ScrapedItem(url=self.url, category=self.category, data=r))
+            log.info("[%s] %s items from %s", self.category, len(items), self.url)
             console.print(
                 f"[green]✓[/] [{self.category}] {len(items)} items from {self.url}"
             )
         except UnsafeURLError:
             raise
         except Exception as e:
+            log.warning("[%s] %s — %s", self.category, self.url, e)
             console.print(f"[red]✗[/] [{self.category}] {self.url} — {e}")
             items.append(
                 ScrapedItem(url=self.url, category=self.category, error=str(e))
@@ -753,8 +787,15 @@ class GenericScraper(BaseScraper):
         js: bool = False,
         allow_private: bool = False,
         dry_run: bool = False,
+        allow_hosts: list[str] | None = None,
     ):
-        super().__init__(url, js=js, allow_private=allow_private, dry_run=dry_run)
+        super().__init__(
+            url,
+            js=js,
+            allow_private=allow_private,
+            dry_run=dry_run,
+            allow_hosts=allow_hosts,
+        )
         self.selectors = selectors or {}
 
     def parse(self, soup: BeautifulSoup) -> list[dict]:
@@ -841,6 +882,14 @@ def export(items: list[ScrapedItem], fmt: str, category: str):
         path = base.with_suffix(".json")
         path.write_text(json.dumps(rows, indent=2, ensure_ascii=False), encoding="utf-8")
         console.print(f"[cyan]→ JSON:[/] {path}")
+        log.info("wrote %s", path)
+
+    if fmt in ("jsonl", "all"):
+        path = base.with_suffix(".jsonl")
+        lines = [json.dumps(row, ensure_ascii=False) for row in rows]
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        console.print(f"[cyan]→ JSONL:[/] {path}")
+        log.info("wrote %s", path)
 
     if fmt in ("csv", "excel", "all"):
         import pandas as pd
@@ -881,14 +930,19 @@ def run_scrape(
     allow_private: bool = False,
     dry_run: bool = False,
     selectors: dict | None = None,
+    allow_hosts: list[str] | None = None,
 ):
     ScraperClass = SCRAPERS.get(category, GenericScraper)
+    kwargs = {
+        "js": js,
+        "allow_private": allow_private,
+        "dry_run": dry_run,
+        "allow_hosts": allow_hosts,
+    }
     if ScraperClass is GenericScraper:
-        scraper = GenericScraper(
-            url, selectors=selectors, js=js, allow_private=allow_private, dry_run=dry_run
-        )
+        scraper = GenericScraper(url, selectors=selectors, **kwargs)
     else:
-        scraper = ScraperClass(url, js=js, allow_private=allow_private, dry_run=dry_run)
+        scraper = ScraperClass(url, **kwargs)
     items = scraper.scrape()
     if not dry_run:
         print_table(items)
@@ -926,6 +980,7 @@ def run_from_config(
     js: bool = False,
     allow_private: bool = False,
     dry_run: bool = False,
+    allow_hosts: list[str] | None = None,
 ):
     path = Path(config_path)
     if not path.is_file():
@@ -940,6 +995,7 @@ def run_from_config(
             allow_private=allow_private,
             dry_run=dry_run,
             selectors=job["selectors"],
+            allow_hosts=allow_hosts,
         )
 
 
@@ -949,7 +1005,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--url", type=str, help="Target URL")
     parser.add_argument("--config", type=str, help="Path to JSON config file")
     parser.add_argument(
-        "--format", choices=["json", "csv", "excel", "all"], default="json"
+        "--format", choices=["json", "jsonl", "csv", "excel", "all"], default="json"
     )
     parser.add_argument(
         "--schedule", type=int, metavar="MINUTES", help="Repeat every N minutes"
@@ -963,11 +1019,25 @@ def main(argv: list[str] | None = None) -> int:
         help="Allow private/loopback scrape targets (off by default)",
     )
     parser.add_argument(
+        "--allow-host",
+        action="append",
+        default=[],
+        metavar="HOST",
+        help="Restrict fetches to this hostname (repeatable)",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Validate inputs and show planned fetches without downloading",
     )
+    parser.add_argument(
+        "--log-level",
+        default=os.getenv("LOG_LEVEL", "INFO"),
+        help="Logging level (default INFO, or LOG_LEVEL)",
+    )
     args = parser.parse_args(argv)
+    configure_logging(args.log_level)
+    allow_hosts = args.allow_host or None
 
     def job():
         if args.config:
@@ -977,6 +1047,7 @@ def main(argv: list[str] | None = None) -> int:
                 js=args.js,
                 allow_private=args.allow_private,
                 dry_run=args.dry_run,
+                allow_hosts=allow_hosts,
             )
         elif args.url:
             run_scrape(
@@ -986,6 +1057,7 @@ def main(argv: list[str] | None = None) -> int:
                 js=args.js,
                 allow_private=args.allow_private,
                 dry_run=args.dry_run,
+                allow_hosts=allow_hosts,
             )
         else:
             parser.print_help()

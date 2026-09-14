@@ -1,0 +1,12 @@
+[Unit]
+Description=Example web scraper oneshot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/python-automation-scripts
+Environment=LOG_LEVEL=INFO
+ExecStart=/usr/bin/python web-scraper/scraper.py --category generic --url https://example.com --allow-host example.com --format jsonl
+User=scraper
+Group=scraper

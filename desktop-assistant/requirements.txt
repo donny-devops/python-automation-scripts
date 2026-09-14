@@ -7,3 +7,4 @@ python-dotenv>=1.0.1
 # pyaudio>=0.2.14       # microphone input — install after portaudio
 psutil>=5.9.8
 pyperclip>=1.8.2
+requests>=2.32.3          # optional OpenWeather briefing

@@ -1,6 +1,15 @@
 from datetime import datetime
 
-from reminders import clip_text, parse_reminder_response, redact_secrets
+import pytest
+
+from reminders import clip_text, parse_reminder_response, redact_secrets, strip_wake_word
+from weather import (
+    OPENWEATHER_HOST,
+    WeatherError,
+    assert_openweather_url,
+    build_weather_url,
+    format_weather_payload,
+)
 
 
 def test_parse_reminder_valid():
@@ -27,3 +36,23 @@ def test_redact_secrets_and_clip():
     assert "[redacted]" in redacted
     assert clip_text("abcdef", 4) == "abcd…"
     assert clip_text("abcd", 4) == "abcd"
+
+
+def test_strip_wake_word():
+    assert strip_wake_word("Aria, status report", "aria") == "status report"
+    assert strip_wake_word("what time is it", "aria") is None
+    assert strip_wake_word("hello", "") == "hello"
+    assert strip_wake_word("ARIA", "aria") == ""
+
+
+def test_openweather_url_stays_on_fixed_host():
+    url = build_weather_url("Miami", "placeholder-key")
+    assert OPENWEATHER_HOST in url
+    assert assert_openweather_url(url) == url
+    with pytest.raises(WeatherError):
+        assert_openweather_url("https://evil.example/data/2.5/weather")
+    summary = format_weather_payload(
+        {"name": "Miami", "weather": [{"description": "clear sky"}], "main": {"temp": 29.4}}
+    )
+    assert "Miami" in summary
+    assert "clear sky" in summary

@@ -50,3 +50,23 @@ def clip_text(text: str, limit: int = 2000) -> str:
     if len(text) <= limit:
         return text
     return text[:limit] + "…"
+
+
+def strip_wake_word(text: str, wake_word: str) -> str | None:
+    """Return *text* with the wake word removed, or None if it is missing.
+
+    An empty *wake_word* disables filtering and returns the stripped utterance.
+    """
+    utterance = (text or "").strip()
+    token = (wake_word or "").strip()
+    if not token:
+        return utterance
+    if not utterance:
+        return None
+    lowered = utterance.lower()
+    needle = token.lower()
+    idx = lowered.find(needle)
+    if idx < 0:
+        return None
+    remainder = (utterance[:idx] + utterance[idx + len(token) :]).strip(" ,.-!?:;")
+    return remainder

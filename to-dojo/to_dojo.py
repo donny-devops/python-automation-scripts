@@ -49,6 +49,16 @@ console = Console()
 DATA_FILE = Path(os.getenv("DOJO_DATA_FILE", "dojo_data.json"))
 PRIORITY_ORDER = ["critical", "high", "normal", "low"]
 
+
+def default_data_file() -> Path:
+    env = os.getenv("DOJO_DATA_FILE", "").strip()
+    if env:
+        return Path(env)
+    cwd_file = Path.cwd() / "dojo_data.json"
+    if cwd_file.is_file():
+        return cwd_file
+    return Path.home() / ".to-dojo" / "dojo_data.json"
+
 # ── Ranks ─────────────────────────────────────────────────────────────────────
 
 RANKS = [
@@ -637,6 +647,35 @@ def delete_task(state: DojoState):
         console.print("[red]Task not found or already completed.[/]")
 
 
+def edit_task_record(
+    state: DojoState,
+    tid: int,
+    *,
+    title: str | None = None,
+    priority: str | None = None,
+    due_date: str | None = None,
+) -> Task | None:
+    for t in state.tasks:
+        if t["id"] == tid and not t.get("completed_at"):
+            if title is not None and title.strip():
+                t["title"] = title.strip()
+            if priority:
+                priority = priority.lower()
+                if priority not in PRIORITY_CONFIG:
+                    raise ValueError(f"Unknown priority {priority!r}")
+                t["priority"] = priority
+            if due_date is not None:
+                due = due_date.strip()
+                if due:
+                    try:
+                        datetime.strptime(due, "%Y-%m-%d")
+                    except ValueError as exc:
+                        raise ValueError("Due date must be YYYY-MM-DD") from exc
+                    t["due_date"] = due
+            return Task(**{k: v for k, v in t.items() if k in {f.name for f in fields(Task)}})
+    return None
+
+
 def edit_task(state: DojoState):
     print_tasks(state)
     tid_str = Prompt.ask("\n[bold cyan]Enter task ID to edit")
@@ -649,18 +688,23 @@ def edit_task(state: DojoState):
         if t["id"] == tid and not t.get("completed_at"):
             console.print(f"[dim]Current title:[/] {t['title']}")
             new_title = Prompt.ask("New title [dim](blank = keep)[/]", default="")
-            if new_title.strip():
-                t["title"] = new_title.strip()
             new_priority = Prompt.ask(
                 "New priority [dim](blank = keep)[/]",
                 choices=["critical", "high", "normal", "low", ""],
                 default="",
             )
-            if new_priority:
-                t["priority"] = new_priority
             new_due = Prompt.ask("New due date [dim](blank = keep)[/]", default="")
-            if new_due.strip():
-                t["due_date"] = new_due.strip()
+            try:
+                edit_task_record(
+                    state,
+                    tid,
+                    title=new_title or None,
+                    priority=new_priority or None,
+                    due_date=new_due.strip() or None,
+                )
+            except ValueError as exc:
+                console.print(f"[red]{exc}[/]")
+                return
             save_state(state)
             console.print("[green]Task updated.[/]")
             return
@@ -737,8 +781,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="To-Dojo — gamified task manager")
     parser.add_argument(
         "--data-file",
-        default=os.getenv("DOJO_DATA_FILE", "dojo_data.json"),
-        help="Path to JSON state file",
+        default=None,
+        help="Path to JSON state file (default: DOJO_DATA_FILE, cwd dojo_data.json if present, else ~/.to-dojo/dojo_data.json)",
     )
     sub = parser.add_subparsers(dest="command")
 
@@ -758,8 +802,16 @@ def main(argv: list[str] | None = None) -> int:
     delete_p = sub.add_parser("delete", help="Delete a pending task by ID")
     delete_p.add_argument("task_id", type=int)
 
+    sub.add_parser("history", help="Show recently completed tasks")
+
+    edit_p = sub.add_parser("edit", help="Edit a pending task")
+    edit_p.add_argument("task_id", type=int)
+    edit_p.add_argument("--title", default="")
+    edit_p.add_argument("--priority", choices=PRIORITY_ORDER, default="")
+    edit_p.add_argument("--due", dest="due_date", default="")
+
     args = parser.parse_args(argv)
-    DATA_FILE = Path(args.data_file)
+    DATA_FILE = Path(args.data_file) if args.data_file else default_data_file()
     state = load_state(DATA_FILE)
 
     if args.command is None:
@@ -817,6 +869,32 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         save_state(state, DATA_FILE)
         console.print(f"[dim]Task #{args.task_id} removed.[/]")
+        return 0
+
+    if args.command == "history":
+        show_history(state)
+        return 0
+
+    if args.command == "edit":
+        if not any((args.title, args.priority, args.due_date)):
+            console.print("[red]Provide --title, --priority, and/or --due.[/]")
+            return 1
+        try:
+            updated = edit_task_record(
+                state,
+                args.task_id,
+                title=args.title or None,
+                priority=args.priority or None,
+                due_date=args.due_date or None,
+            )
+        except ValueError as exc:
+            console.print(f"[red]{exc}[/]")
+            return 1
+        if not updated:
+            console.print("[red]Task not found or already completed.[/]")
+            return 1
+        save_state(state, DATA_FILE)
+        console.print(f"[green]Updated[/] #{updated.id} {updated.title}")
         return 0
 
     return 0

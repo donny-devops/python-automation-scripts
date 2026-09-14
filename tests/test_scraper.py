@@ -136,6 +136,24 @@ def test_export_json(tmp_path, monkeypatch):
     assert payload[0]["title"] == "Hello"
 
 
+def test_export_jsonl(tmp_path, monkeypatch):
+    monkeypatch.setattr("scraper.OUTPUT_DIR", tmp_path)
+    from scraper import ScrapedItem
+
+    items = [
+        ScrapedItem(url="https://example.com", category="generic", data={"title": "Hello"})
+    ]
+    export(items, "jsonl", "generic")
+    files = list(tmp_path.glob("generic_*.jsonl"))
+    assert len(files) == 1
+    line = files[0].read_text(encoding="utf-8").strip().splitlines()[0]
+    assert json.loads(line)["title"] == "Hello"
+
+
+def test_dry_run_rejects_host_not_on_allowlist():
+    assert main(["--dry-run", "--allow-host", "example.com", "--url", "https://other.test/"]) == 1
+
+
 def test_dry_run_blocks_loopback():
     assert main(["--dry-run", "--url", "http://127.0.0.1/"]) == 1
 

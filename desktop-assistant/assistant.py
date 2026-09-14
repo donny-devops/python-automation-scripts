@@ -27,7 +27,7 @@ from datetime import datetime
 
 from dotenv import load_dotenv
 
-from reminders import clip_text, parse_reminder_response, redact_secrets
+from reminders import clip_text, parse_reminder_response, redact_secrets, strip_wake_word
 
 load_dotenv()
 
@@ -174,9 +174,19 @@ def daily_briefing(client, engine) -> None:
     greeting = (
         "Good morning" if hour < 12 else "Good afternoon" if hour < 17 else "Good evening"
     )
+    weather_note = ""
+    city = os.getenv("CITY", "").strip()
+    weather_key = os.getenv("WEATHER_API_KEY", "").strip()
+    if city and weather_key:
+        try:
+            from weather import fetch_weather_summary
+
+            weather_note = f" Current weather: {fetch_weather_summary(city, weather_key)}."
+        except Exception as exc:
+            print(f"[Weather skipped] {exc}")
     prompt = (
         f"{greeting}! Please give me a very short daily briefing (3 bullets max). "
-        f"Today is {datetime.now().strftime('%A, %B %d')}. "
+        f"Today is {datetime.now().strftime('%A, %B %d')}.{weather_note} "
         "Do not invent news headlines; keep it motivational and practical."
     )
     response = client.messages.create(
@@ -304,10 +314,11 @@ class Assistant:
             return input("You: ").strip()
         voice = listen_for_voice()
         if voice:
-            if WAKE_WORD and WAKE_WORD not in voice.lower() and len(self.history) == 0:
-                print(f"(say '{WAKE_WORD}' or type in text mode)")
-                return input("You (text): ").strip()
-            return voice
+            cleaned = strip_wake_word(voice, WAKE_WORD)
+            if WAKE_WORD and cleaned is None:
+                print(f"(say '{WAKE_WORD}' to continue)")
+                return None
+            return cleaned or voice
         return input("You (text): ").strip()
 
     def run(self) -> None:

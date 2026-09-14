@@ -5,6 +5,8 @@ from to_dojo import (
     add_task_record,
     complete_task_by_id,
     current_streak,
+    default_data_file,
+    edit_task_record,
     get_rank,
     load_state,
     main,
@@ -89,3 +91,26 @@ def test_cli_add_and_complete(tmp_path):
     assert loaded.total_dp == 20
     assert main(["--data-file", str(data), "list"]) == 0
     assert main(["--data-file", str(data), "stats"]) == 0
+    assert main(["--data-file", str(data), "history"]) == 0
+    assert main(["--data-file", str(data), "edit", "1", "--title", "already done"]) == 1
+
+
+def test_cli_edit_pending_task(tmp_path):
+    data = tmp_path / "dojo.json"
+    assert main(["--data-file", str(data), "add", "Draft"]) == 0
+    assert main(["--data-file", str(data), "edit", "1", "--title", "Final", "--priority", "high"]) == 0
+    loaded = load_state(data)
+    assert loaded.tasks[0]["title"] == "Final"
+    assert loaded.tasks[0]["priority"] == "high"
+    task = edit_task_record(loaded, 1, due_date="2026-09-20")
+    assert task is not None
+    assert task.due_date == "2026-09-20"
+
+
+def test_default_data_file_uses_home_when_cwd_missing(tmp_path, monkeypatch):
+    monkeypatch.delenv("DOJO_DATA_FILE", raising=False)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("to_dojo.Path.home", lambda: tmp_path / "home")
+    assert default_data_file() == tmp_path / "home" / ".to-dojo" / "dojo_data.json"
+    (tmp_path / "dojo_data.json").write_text("{}", encoding="utf-8")
+    assert default_data_file() == tmp_path / "dojo_data.json"

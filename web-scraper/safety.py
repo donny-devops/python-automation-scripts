@@ -11,6 +11,7 @@ import ipaddress
 import os
 import socket
 from urllib.parse import urljoin, urlparse
+from collections.abc import Sequence
 
 ALLOWED_SCHEMES = {"http", "https"}
 ALLOWED_PROXY_SCHEMES = {"http", "https", "socks5", "socks5h"}
@@ -81,7 +82,27 @@ def _hostname_ips(hostname: str, timeout: float = 5.0) -> list[ipaddress.IPv4Add
     return addresses
 
 
-def assert_safe_url(url: str, *, allow_private: bool = False) -> str:
+def host_in_allowlist(hostname: str, allow_hosts: Sequence[str] | None) -> bool:
+    """Return True if *hostname* is permitted by an optional allowlist.
+
+    An empty/None allowlist means any host is allowed (SSRF checks still apply).
+    `example.com` also matches `www.example.com`.
+    """
+    if not allow_hosts:
+        return True
+    host = hostname.lower().rstrip(".")
+    allowed = [item.lower().strip().rstrip(".") for item in allow_hosts if item and str(item).strip()]
+    if not allowed:
+        return True
+    return any(host == item or host.endswith("." + item) for item in allowed)
+
+
+def assert_safe_url(
+    url: str,
+    *,
+    allow_private: bool = False,
+    allow_hosts: Sequence[str] | None = None,
+) -> str:
     """Validate *url* and return a normalized string, or raise UnsafeURLError."""
     if not url or not isinstance(url, str):
         raise UnsafeURLError("URL is required")
@@ -98,6 +119,8 @@ def assert_safe_url(url: str, *, allow_private: bool = False) -> str:
         raise UnsafeURLError("URL port is invalid")
 
     hostname = parsed.hostname.lower().rstrip(".")
+    if not host_in_allowlist(hostname, allow_hosts):
+        raise UnsafeURLError(f"Host {hostname!r} is not in the allowlist")
     if hostname in BLOCKED_HOSTNAMES and not allow_private:
         raise UnsafeURLError(f"Host {hostname!r} is not allowed")
 
@@ -117,11 +140,17 @@ def assert_safe_url(url: str, *, allow_private: bool = False) -> str:
     return candidate
 
 
-def resolve_redirect(current_url: str, location: str, *, allow_private: bool = False) -> str:
+def resolve_redirect(
+    current_url: str,
+    location: str,
+    *,
+    allow_private: bool = False,
+    allow_hosts: Sequence[str] | None = None,
+) -> str:
     if not location or not location.strip():
         raise UnsafeURLError("Redirect response is missing a Location header")
     nxt = urljoin(current_url, location.strip())
-    return assert_safe_url(nxt, allow_private=allow_private)
+    return assert_safe_url(nxt, allow_private=allow_private, allow_hosts=allow_hosts)
 
 
 def assert_safe_proxy(proxy_url: str) -> str:

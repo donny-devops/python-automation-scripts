@@ -6,19 +6,21 @@ Production-oriented Python tools for scraping, desktop assistance, and gamified 
 
 | Tool | Path | Purpose |
 | --- | --- | --- |
-| Web scraper | `web-scraper/` | Category-aware HTML extraction with SSRF guards, retries, and JSON/CSV/Excel export |
+| Web scraper | `web-scraper/` | Category-aware HTML extraction with SSRF guards, retries, and JSON/JSONL/CSV/Excel export |
 | Desktop assistant | `desktop-assistant/` | Claude-powered local assistant with reminders, stats, and notifications |
-| To-Dojo | `to-dojo/` | Ranked task manager with streaks, achievements, and an optional CLI |
+| To-Dojo | `to-dojo/` | Ranked task manager with streaks, achievements, and a CLI |
 
-Python 3.10+ is required.
+Python 3.10+ is required. Per-tool details live in each folder's README.
 
 ## Security defaults
 
 - Scrape targets must be `http` or `https`. Loopback, link-local, metadata, and private ranges are blocked unless you pass `--allow-private`.
+- `--allow-host` optionally pins allowed hostnames.
 - Redirects are followed only after the next URL is re-checked.
 - Responses are capped (`SCRAPER_MAX_BYTES`, default 5 MB).
 - `robots.txt` is respected unless `SCRAPER_RESPECT_ROBOTS=false`.
 - The assistant redacts obvious API tokens before sending clipboard text to the model.
+- Optional weather briefing calls only `api.openweathermap.org`.
 - To-Dojo writes state atomically and quarantines corrupt JSON instead of crashing.
 
 Do not scrape sites you are not allowed to access. Honor terms of service and rate limits.
@@ -30,70 +32,65 @@ git clone https://github.com/donny-devops/python-automation-scripts.git
 cd python-automation-scripts
 python -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+pip install -e ".[dev]"
 ```
 
-Install extra dependencies only for the tool you are running:
+Tool extras (or the matching `*/requirements.txt`):
 
 ```bash
-pip install -r web-scraper/requirements.txt
-pip install -r desktop-assistant/requirements.txt
-pip install -r to-dojo/requirements.txt
+pip install -e ".[scraper]"
+pip install -e ".[assistant]"
+pip install -e ".[dojo]"
 ```
+
+Editable install also provides `web-scraper`, `to-dojo`, and `desktop-assistant` console commands.
 
 Copy the matching `.env.example` to `.env` and fill in values. Never commit secrets.
 
 ## Web scraper
 
 ```bash
-python web-scraper/scraper.py --help
 python web-scraper/scraper.py --dry-run --url https://example.com
-python web-scraper/scraper.py --category news --url https://example.com --format json
-python web-scraper/scraper.py --config web-scraper/config.example.json
+python web-scraper/scraper.py --category news --url https://example.com --format jsonl --allow-host example.com
 ```
 
-Categories: `ecommerce`, `news`, `jobs`, `real_estate`, `finance`, `social`, `weather`, `generic`.
-
-Useful flags:
-
-- `--dry-run` — validate the URL and plan the fetch without downloading
-- `--js` — render with Playwright
-- `--allow-private` — permit intranet/loopback targets
-- `--schedule MINUTES` — repeat on an interval
+See [web-scraper/README.md](web-scraper/README.md). Scheduler samples: [examples/cron.example](examples/cron.example), [examples/systemd/](examples/systemd/).
 
 ## Desktop assistant
 
 ```bash
-cp desktop-assistant/.env.example desktop-assistant/.env
 python desktop-assistant/assistant.py --text
-python desktop-assistant/assistant.py --notify
 ```
 
-`ANTHROPIC_API_KEY` is required at runtime, not at import. Commands: `quit`, `clear`, `stats`.
+See [desktop-assistant/README.md](desktop-assistant/README.md). Host-only (mic/TTS/clipboard); not shipped in Docker.
 
 ## To-Dojo
 
-Interactive:
-
-```bash
-python to-dojo/to_dojo.py
-```
-
-Non-interactive:
-
 ```bash
 python to-dojo/to_dojo.py add "Write tests" --priority high
-python to-dojo/to_dojo.py list
 python to-dojo/to_dojo.py complete 1
-python to-dojo/to_dojo.py stats
+python to-dojo/to_dojo.py history
 ```
 
-State is stored in `dojo_data.json` (override with `--data-file` or `DOJO_DATA_FILE`). Streaks increase only when you complete a task, not when you open the app.
+See [to-dojo/README.md](to-dojo/README.md). Default state file is `~/.to-dojo/dojo_data.json` unless `./dojo_data.json` already exists.
+
+## Docker
+
+The image runs the scraper and To-Dojo (no Playwright, no assistant):
+
+```bash
+docker build -t python-automation-scripts .
+docker run --rm python-automation-scripts web-scraper/scraper.py --help
+docker run --rm -v dojo-data:/data python-automation-scripts \
+  to-dojo/to_dojo.py --data-file /data/dojo.json list
+```
+
+For JS rendering, install Playwright on the host: `playwright install chromium`.
 
 ## Development
 
 ```bash
-pip install -r requirements.txt
+pip install -e ".[dev]"
 ruff check .
 pytest
 ```

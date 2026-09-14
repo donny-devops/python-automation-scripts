@@ -1,0 +1,9 @@
+# Nightly scrape (replace the URL with a host you are allowed to fetch).
+# Logs go to syslog-style stdout; use --log-level WARNING in production.
+30 2 * * * /usr/bin/python /opt/python-automation-scripts/web-scraper/scraper.py \
+  --category generic \
+  --url https://example.com \
+  --allow-host example.com \
+  --format jsonl \
+  --log-level INFO \
+  >> /var/log/web-scraper.log 2>&1

@@ -87,3 +87,27 @@ def test_proxy_scheme_validation():
     assert assert_safe_proxy("http://127.0.0.1:8080")
     with pytest.raises(UnsafeURLError):
         assert_safe_proxy("file:///tmp/proxy")
+
+
+def test_allow_host_exact_and_subdomain(monkeypatch):
+    monkeypatch.setattr(
+        "safety._hostname_ips",
+        lambda hostname, timeout=5.0: [ipaddress.ip_address("93.184.216.34")],
+    )
+    assert assert_safe_url("https://example.com/a", allow_hosts=["example.com"])
+    assert assert_safe_url("https://www.example.com/a", allow_hosts=["example.com"])
+    with pytest.raises(UnsafeURLError):
+        assert_safe_url("https://evil.example", allow_hosts=["example.com"])
+
+
+def test_redirect_respects_allow_host(monkeypatch):
+    monkeypatch.setattr(
+        "safety._hostname_ips",
+        lambda hostname, timeout=5.0: [ipaddress.ip_address("93.184.216.34")],
+    )
+    with pytest.raises(UnsafeURLError):
+        resolve_redirect(
+            "https://example.com/a",
+            "https://other.example/b",
+            allow_hosts=["example.com"],
+        )

@@ -1,0 +1,10 @@
+[Unit]
+Description=Example web scraper timer (replace URL before enabling)
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+Unit=scraper.service
+
+[Install]
+WantedBy=timers.target
