@@ -1,0 +1,29 @@
+name: CodeQL
+
+# Advanced CodeQL SARIF uploads are rejected while GitHub default setup is enabled:
+# "CodeQL analyses from advanced configurations cannot be processed when the default setup is enabled"
+# Default setup already analyzes Python and Actions. Keep this workflow as a no-op so CI stays green.
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  schedule:
+    - cron: '30 1 * * 0'
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: Analyze (python)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [ "python" ]
+    steps:
+      - name: Skip advanced CodeQL while default setup is enabled
+        run: |
+          echo "Skipping advanced CodeQL SARIF upload."
+          echo "GitHub default setup already provides CodeQL analysis for this repository."
