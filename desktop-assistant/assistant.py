@@ -17,17 +17,17 @@ Usage:
   python assistant.py --notify   # run notification scheduler only
 """
 
-import os
-import time
-import threading
 import argparse
+import os
+import threading
+import time
 from datetime import datetime
 
 import anthropic
 import psutil
 import pyperclip
-import schedule
 import pyttsx3
+import schedule
 from dotenv import load_dotenv
 from plyer import notification
 
@@ -93,7 +93,7 @@ def listen_for_voice(timeout: int = 5) -> str | None:
         text = r.recognize_google(audio)
         print(f"You said: {text}")
         return text
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         print(f"(voice error: {e})")
         return None
 
@@ -105,8 +105,8 @@ def get_system_stats() -> str:
     cpu = psutil.cpu_percent(interval=1)
     mem = psutil.virtual_memory()
     disk = psutil.disk_usage("/")
-    boot = datetime.fromtimestamp(psutil.boot_time())
-    uptime = datetime.now() - boot
+    boot = datetime.fromtimestamp(psutil.boot_time())  # noqa: DTZ006
+    uptime = datetime.now() - boot  # noqa: DTZ005
     return (
         f"CPU: {cpu}% | "
         f"RAM: {mem.percent}% used ({mem.used // 1024**2} MB / {mem.total // 1024**2} MB) | "
@@ -126,7 +126,7 @@ def send_notification(title: str, message: str, timeout: int = 8):
             app_name=ASSISTANT_NAME,
             timeout=timeout,
         )
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         print(f"[Notification error] {e}")
 
 
@@ -145,7 +145,7 @@ def parse_reminder_response(response: str) -> tuple[datetime, str] | None:
 
 
 def schedule_reminder(dt: datetime, message: str, engine):
-    delay = (dt - datetime.now()).total_seconds()
+    delay = (dt - datetime.now()).total_seconds()  # noqa: DTZ005
     if delay <= 0:
         send_notification(f"{ASSISTANT_NAME} Reminder", message)
         return
@@ -164,7 +164,7 @@ def schedule_reminder(dt: datetime, message: str, engine):
 
 
 def daily_briefing(client: anthropic.Anthropic, engine):
-    hour = datetime.now().hour
+    hour = datetime.now().hour  # noqa: DTZ005
     greeting = (
         "Good morning"
         if hour < 12
@@ -174,7 +174,7 @@ def daily_briefing(client: anthropic.Anthropic, engine):
     )
     prompt = (
         f"{greeting}! Please give me a very short daily briefing (3 bullets max). "
-        f"Today is {datetime.now().strftime('%A, %B %d')}. "
+        f"Today is {datetime.now().strftime('%A, %B %d')}. "  # noqa: DTZ005
         "Current system: N/A"
     )
     response = client.messages.create(
@@ -205,7 +205,7 @@ def system_health_check(engine):
 
 
 def hourly_reminder(engine):
-    now = datetime.now().strftime("%I:%M %p")
+    now = datetime.now().strftime("%I:%M %p")  # noqa: DTZ005
     send_notification(ASSISTANT_NAME, f"It's {now}. Stay focused!")
 
 
@@ -248,8 +248,8 @@ class Assistant:
                 clip = pyperclip.paste()
                 if clip:
                     user_input += f"\n\n[Clipboard content:\n{clip[:2000]}]"
-            except Exception:
-                pass
+            except Exception:  # noqa: BLE001
+                print("(clipboard read failed — continuing)")
 
         self.history.append({"role": "user", "content": user_input})
 
@@ -317,7 +317,7 @@ class Assistant:
             except KeyboardInterrupt:
                 print("\nGoodbye!")
                 break
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 print(f"[Error] {e}")
 
 
