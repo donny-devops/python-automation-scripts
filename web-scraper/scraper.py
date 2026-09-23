@@ -30,23 +30,23 @@ Usage:
   python scraper.py --schedule 30        # run every 30 minutes
 """
 
+import argparse
+import asyncio
+import hashlib
+import json
 import os
+import random
 import re
 import sys
-import json
 import time
-import asyncio
-import random
-import hashlib
-import argparse
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import urlparse, urljoin
+from urllib.parse import urljoin, urlparse
 
-import requests
 import pandas as pd
+import requests
 import schedule
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
@@ -61,10 +61,10 @@ console = Console()
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
-DELAY_MIN = float(os.getenv("SCRAPER_DELAY_MIN", 1.0))
-DELAY_MAX = float(os.getenv("SCRAPER_DELAY_MAX", 3.0))
-MAX_RETRIES = int(os.getenv("SCRAPER_MAX_RETRIES", 3))
-CONCURRENCY = int(os.getenv("SCRAPER_CONCURRENCY", 5))
+DELAY_MIN = float(os.getenv("SCRAPER_DELAY_MIN", "1.0"))
+DELAY_MAX = float(os.getenv("SCRAPER_DELAY_MAX", "3.0"))
+MAX_RETRIES = int(os.getenv("SCRAPER_MAX_RETRIES", "3"))
+CONCURRENCY = int(os.getenv("SCRAPER_CONCURRENCY", "5"))
 OUTPUT_DIR = Path(os.getenv("SCRAPER_OUTPUT_DIR", "./output"))
 HEADLESS = os.getenv("SCRAPER_HEADLESS", "true").lower() == "true"
 PROXY_URL = os.getenv("PROXY_URL", "")
@@ -187,7 +187,7 @@ class BaseScraper(ABC):
             console.print(
                 f"[green]✓[/] [{self.category}] {len(items)} items from {self.url}"
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             console.print(f"[red]✗[/] [{self.category}] {self.url} — {e}")
             items.append(
                 ScrapedItem(url=self.url, category=self.category, error=str(e))
@@ -268,8 +268,8 @@ class EcommerceScraper(BaseScraper):
                 op = float(re.sub(r"[^\d.]", "", orig))
                 if op > p > 0:
                     discount = f"{round((op - p) / op * 100)}%"
-            except Exception:
-                pass
+            except Exception:  # noqa: BLE001
+                discount = ""
 
             items.append(
                 {
@@ -358,7 +358,7 @@ class JobsScraper(BaseScraper):
 
     category = "jobs"
 
-    REMOTE_KEYWORDS = {"remote", "work from home", "wfh", "distributed", "anywhere"}
+    REMOTE_KEYWORDS = frozenset({"remote", "work from home", "wfh", "distributed", "anywhere"})
 
     def parse(self, soup: BeautifulSoup) -> list[dict]:
         items = []
@@ -594,7 +594,7 @@ SCRAPERS: dict[str, type[BaseScraper]] = {
 def export(items: list[ScrapedItem], fmt: str, category: str):
     if not items:
         return
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")  # noqa: DTZ005
     base = OUTPUT_DIR / f"{category}_{ts}"
     rows = [
         {

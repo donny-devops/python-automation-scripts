@@ -24,19 +24,19 @@ Usage:
   python to_dojo.py
 """
 
-import os
 import json
+import os
 import random
+from dataclasses import asdict, dataclass, field
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from dataclasses import dataclass, field, asdict
 
+from dotenv import load_dotenv
+from rich import box
 from rich.console import Console
-from rich.table import Table
 from rich.panel import Panel
 from rich.prompt import Prompt
-from rich import box
-from dotenv import load_dotenv
+from rich.table import Table
 
 load_dotenv()
 
@@ -139,7 +139,7 @@ class Task:
     title: str
     priority: str = "normal"
     due_date: str | None = None
-    created_at: str = field(default_factory=lambda: datetime.now().isoformat())
+    created_at: str = field(default_factory=lambda: datetime.now().isoformat())  # noqa: DTZ005
     completed_at: str | None = None
     dp_earned: int = 0
     notes: str = ""
@@ -209,10 +209,10 @@ def rank_progress_bar(dp: int) -> str:
 
 
 def update_streak(state: DojoState) -> int:
-    today = str(date.today())
+    today = str(date.today())  # noqa: DTZ011
     if state.last_active_date == today:
         return state.streak
-    yesterday = str(date.today() - timedelta(days=1))
+    yesterday = str(date.today() - timedelta(days=1))  # noqa: DTZ011
     if state.last_active_date == yesterday:
         state.streak += 1
     elif state.last_active_date != today:
@@ -278,7 +278,7 @@ def sensei_hint(task_title: str) -> str:
             ],
         )
         return response.content[0].text.strip()
-    except Exception:
+    except Exception:  # noqa: BLE001
         return random.choice(KI_PHRASES)
 
 
@@ -324,7 +324,7 @@ def print_tasks(state: DojoState):
     ):
         cfg = PRIORITY_CONFIG[t.priority]
         due_str = t.due_date or "—"
-        due_col = "red" if (t.due_date and t.due_date < str(date.today())) else "white"
+        due_col = "red" if (t.due_date and t.due_date < str(date.today())) else "white"  # noqa: DTZ011
         base_dp = cfg["dp"]
         mult = streak_multiplier(state.streak)
         est_dp = int(base_dp * mult)
@@ -446,7 +446,7 @@ def complete_task(state: DojoState):
             base_dp = PRIORITY_CONFIG[task.priority]["dp"]
             earned = int(base_dp * mult)
 
-            t["completed_at"] = datetime.now().isoformat()
+            t["completed_at"] = datetime.now().isoformat()  # noqa: DTZ005
             t["dp_earned"] = earned
 
             state.total_dp += earned
